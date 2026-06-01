@@ -1,0 +1,13 @@
+# Set default behavior to automatic text line ending normalization.
+* text=auto
+
+# Force LF for Terraform files
+*.tf text eol=lf
+*.tfvars text eol=lf
+
+# Force LF for shell scripts
+*.sh text eol=lf
+
+# Specify binary files
+*.png binary
+*.jpg binary

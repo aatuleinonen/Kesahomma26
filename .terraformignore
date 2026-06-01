@@ -1,0 +1,12 @@
+**/.terraform/*
+*.tfvars
+*.tfvars.json
+*.tfstate
+*.tfstate.*
+*.tfplan
+.git/
+.gitignore
+.terraformignore
+.editorconfig
+.gitattributes
+README.md
