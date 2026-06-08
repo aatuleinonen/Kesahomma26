@@ -115,17 +115,3 @@ terraform plan -out=tfplan
 # Apply the plan
 terraform apply tfplan
 ```
-
----
-
-### 4. Infrastructure Pipeline
-
-The repository integrates an AWS-native CI/CD infrastructure pipeline that automatically deploys infrastructure changes when they are merged.
-
-> [!IMPORTANT]
-> **Manual CodeStar Activation:**
-> After the first `terraform apply` runs, you must manually activate the AWS CodeStar connection to GitHub in the AWS Console. Go to the AWS Developer Tools / Connections page, select the created connection, and follow the prompts to authorize and connect to the GitHub repository. The pipeline will remain in a pending state and will not run until this connection is authorized.
-
-> [!NOTE]
-> **Least Privilege IAM Design:**
-> The Pipeline's IAM policy utilizes a strict least-privilege approach, only granting access to explicitly required resources needed to plan, build, and deploy the infrastructure baseline.
