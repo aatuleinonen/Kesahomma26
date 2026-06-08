@@ -3,7 +3,6 @@
 
 data "aws_caller_identity" "current" {}
 
-# Bounding logs_retention_time to 7 days fulfills the MVP log retention requirement (Issue #11)
 module "aws_infra_pipeline" {
   source = "git::https://github.com/Nets-Platform-Enablement/tf-module-aws-infra-pipeline.git?ref=v2.2.6"
 
