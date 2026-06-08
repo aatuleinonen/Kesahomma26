@@ -1,11 +1,14 @@
+terraform {
+  backend "s3" {}
+}
+
 provider "aws" {
   region = var.aws_region
 
   default_tags {
     tags = {
+      Project     = "kesahomma26"
       Environment = var.environment
-      Project     = "Kesahomma26"
-      ManagedBy   = "Terraform"
     }
   }
 }
