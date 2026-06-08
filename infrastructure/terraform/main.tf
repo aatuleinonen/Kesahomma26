@@ -16,5 +16,5 @@ module "aws_infra_pipeline" {
   enable_checkov       = true
   require_checkov_pass = false
   logs_retention_time  = 7
-  emails               = ["aatu.leinonen@gmail.com", "juha.leinonen@gmail.com"]
+  emails               = ["placeholder@example.com"]
 }
