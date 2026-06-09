@@ -1,0 +1,10 @@
+{
+  "name": "@kesahomma26/agents",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "echo \"Building agents...\"",
+    "test": "echo \"Testing agents...\"",
+    "lint": "echo \"Linting agents...\""
+  }
+}

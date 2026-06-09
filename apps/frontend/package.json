@@ -1,0 +1,10 @@
+{
+  "name": "@kesahomma26/frontend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "echo \"Building frontend...\"",
+    "test": "echo \"Testing frontend...\"",
+    "lint": "echo \"Linting frontend...\""
+  }
+}
