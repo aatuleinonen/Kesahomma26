@@ -12,6 +12,7 @@ branch_name          = "main"
 github_repository_id = "aatuleinonen/kesahomma26"
 variables_file       = "dev.tfvars"
 tfbackend_file       = "dev.s3.tfbackend"
+directory            = "infrastructure/terraform"
 
 enable_checkov       = true
 require_checkov_pass = false
