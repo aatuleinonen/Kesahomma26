@@ -1,5 +1,9 @@
 terraform {
-  backend "s3" {}
+  backend "s3" {
+    bucket = "aatuleinonen-tfstate"
+    region = "eu-north-1"
+    key    = "dev/terraform.tfstate"
+  }
 }
 
 provider "aws" {

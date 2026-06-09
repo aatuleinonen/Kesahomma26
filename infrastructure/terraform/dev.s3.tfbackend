@@ -1,4 +1,4 @@
-bucket       = "PLACEHOLDER_BUCKET_NAME"
-region       = "PLACEHOLDER_REGION"
+bucket       = "aatuleinonen-tfstate"
+region       = "eu-north-1"
 key          = "dev/terraform.tfstate"
 use_lockfile = true

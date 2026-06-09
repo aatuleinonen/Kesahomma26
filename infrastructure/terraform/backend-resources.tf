@@ -3,7 +3,7 @@
 # and blocked public access. Native state locking is handled on this bucket.
 
 resource "aws_s3_bucket" "terraform_state" {
-  bucket = "kesahomma26-405852846204-terraform-state"
+  bucket = "aatuleinonen-tfstate"
 
   # Prevent accidental deletion of the S3 bucket
   lifecycle {
