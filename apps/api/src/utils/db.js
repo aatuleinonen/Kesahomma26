@@ -25,13 +25,13 @@ function buildIsolatedQueryParams(req, tableName, extraParams = {}) {
   const userId = getUserId(req);
 
   return {
+    ...extraParams,
     TableName: tableName,
     KeyConditionExpression: "userId = :userId",
-    ...extraParams,
     ExpressionAttributeValues: {
+      ...(extraParams.ExpressionAttributeValues || {}),
       ":userId": userId,
-      ...(extraParams.ExpressionAttributeValues || {})
-    }
+    },
   };
 }
 
