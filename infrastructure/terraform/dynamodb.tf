@@ -35,8 +35,5 @@ resource "aws_dynamodb_table" "single_table" {
     enabled = true
   }
 
-  tags = {
-    Environment = var.environment
-    Project     = "Kesahomma26"
-  }
+  # Tags are applied via provider.default_tags
 }
