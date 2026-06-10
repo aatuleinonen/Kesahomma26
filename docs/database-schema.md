@@ -1,6 +1,6 @@
 # AWS DynamoDB Single-Table Database Schema Design
 
-This document describes the DynamoDB Single-Table schema design for Kesahomma26 (Issue #13). The design enforces **strict tenant isolation** at the database level by partition key design, models portfolio accounting entities in a single table, and supports multi-currency transactions, fees, cash movements, and holding-level transaction history.
+This document describes the DynamoDB Single-Table schema design for Kesahomma26 (Issue #13). The design enforces **strict tenant isolation** at the database level by partition key design convention, models portfolio accounting entities in a single table, and supports multi-currency transactions, fees, cash movements, and holding-level transaction history.
 
 ## Design Principles
 
@@ -310,7 +310,7 @@ Here are the specific query configurations mapped to API requests.
   - `SK between PORTFOLIO# and PORTFOLIO$`
 * **Filter Condition**:
   - `SK ends_with #METADATA`
-* **Note**: DynamoDB does not support `ends_with` in key conditions. If this access pattern becomes hot or users can have many portfolio child rows, add a dedicated portfolio list item such as `SK = PORTFOLIO_LIST#<portfolioId>` or a GSI for portfolio metadata. Do not use `SK begins_with PORTFOLIO#` alone, because it also matches holdings, transactions, cash rows, and analysis records.
+* **Note**: DynamoDB does not support `ends_with` in key conditions. If `begins_with(SK, "PORTFOLIO#")` is used, it will also pull back child records like holdings and transactions because they share that prefix. Therefore, the backend will need to explicitly use a `FilterExpression` or client-side filtering to isolate the metadata-only rows. If this access pattern becomes hot or users can have many portfolio child rows, add a dedicated portfolio list item such as `SK = PORTFOLIO_LIST#<portfolioId>` or a GSI for portfolio metadata.
 
 ### AP3: Fetch a Single Portfolio Metadata
 * **Operation**: `GetItem`
