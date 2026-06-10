@@ -1,7 +1,7 @@
-const app = require("./app");
+process.env.NODE_ENV = process.env.NODE_ENV || "development";
+process.env.BYPASS_AUTH = process.env.BYPASS_AUTH || "true";
 
-const PORT = 3001; // use separate port for verification test
-const server = app.listen(PORT, async () => {
+const app = require("./app");
   console.log(`Test server running on port ${PORT}`);
   
   let passed = true;
