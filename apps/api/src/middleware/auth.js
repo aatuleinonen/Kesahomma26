@@ -59,10 +59,10 @@ const authMiddleware = async (req, res, next) => {
     
     next();
   } catch (err) {
-    console.warn("JWT validation failed:", err.message);
+    console.warn("JWT validation failed:", err);
     return res.status(401).json({
       error: "Unauthorized",
-      message: `Token validation failed: ${err.message}`
+      message: "Token validation failed"
     });
   }
 };
