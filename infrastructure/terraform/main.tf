@@ -13,7 +13,8 @@ module "aws_infra_pipeline" {
   variables_file       = "./dev.tfvars"
   tfbackend_file       = "./dev.s3.tfbackend"
   directory            = "infrastructure/terraform"
-
+  tflint_version       = "v0.63.1"
+  
   enable_checkov       = true
   require_checkov_pass = false
   logs_retention_time  = 7

@@ -2,9 +2,16 @@
   "name": "@kesahomma26/api",
   "version": "0.1.0",
   "private": true,
+  "main": "src/app.js",
   "scripts": {
+    "start": "node src/app.js",
     "build": "echo \"Building api...\"",
     "test": "echo \"Testing api...\"",
     "lint": "echo \"Linting api...\""
+  },
+  "dependencies": {
+    "aws-jwt-verify": "^4.0.1",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
   }
 }
