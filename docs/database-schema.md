@@ -309,8 +309,8 @@ Here are the specific query configurations mapped to API requests.
   - `PK = USER#<userId>`
   - `SK between PORTFOLIO# and PORTFOLIO$`
 * **Filter Condition**:
-  - `SK ends_with #METADATA`
-* **Note**: DynamoDB does not support `ends_with` in key conditions. If `begins_with(SK, "PORTFOLIO#")` is used, it will also pull back child records like holdings and transactions because they share that prefix. Therefore, the backend will need to explicitly use a `FilterExpression` or client-side filtering to isolate the metadata-only rows. If this access pattern becomes hot or users can have many portfolio child rows, add a dedicated portfolio list item such as `SK = PORTFOLIO_LIST#<portfolioId>` or a GSI for portfolio metadata.
+  - `contains(SK, "#METADATA")`
+* **Note**: DynamoDB does not support `ends_with` in either key conditions or filter expressions. Querying by `begins_with(SK, "PORTFOLIO#")` (or `between PORTFOLIO# and PORTFOLIO$`) will also return child rows like holdings/transactions, so either filter with `contains(SK, "#METADATA")` or consider a dedicated list item/GSI to avoid filtering.
 
 ### AP3: Fetch a Single Portfolio Metadata
 * **Operation**: `GetItem`
