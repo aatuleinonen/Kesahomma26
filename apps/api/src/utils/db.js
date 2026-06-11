@@ -18,7 +18,7 @@ function getUserId(req) {
  * 
  * @param {object} req - Express request object containing the verified user context
  * @param {string} tableName - DynamoDB table name
- * @param {object} extraParams - Additional DynamoDB parameter configuration overrides
+ * @param {object} extraParams - Additional DynamoDB parameter configuration (e.g., ProjectionExpression, ExpressionAttributeNames)
  * @returns {object} Isolated DynamoDB query parameter configuration
  */
 function buildIsolatedQueryParams(req, tableName, extraParams = {}) {
