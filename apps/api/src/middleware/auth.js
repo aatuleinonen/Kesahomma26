@@ -7,13 +7,13 @@ let verifier;
 if (process.env.COGNITO_USER_POOL_ID && process.env.COGNITO_CLIENT_ID) {
   verifier = CognitoJwtVerifier.create({
     userPoolId: process.env.COGNITO_USER_POOL_ID,
-    tokenUse: "id", // standard for reading user attributes like email
+    tokenUse: "access",
     clientId: process.env.COGNITO_CLIENT_ID,
   });
 }
 
 /**
- * Express middleware to validate Cognito ID JWT tokens.
+ * Express middleware to validate Cognito access JWT tokens.
  */
 const authMiddleware = async (req, res, next) => {
   const authHeader = req.headers.authorization;
@@ -52,8 +52,8 @@ const authMiddleware = async (req, res, next) => {
     // Attach the validated claims to the request object
     req.user = {
       sub: payload.sub,
-      email: payload.email,
-      email_verified: payload.email_verified,
+      email: payload.email || null,
+      email_verified: payload.email_verified ?? null,
       claims: payload
     };
     
