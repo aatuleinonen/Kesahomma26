@@ -44,7 +44,8 @@ app.get("/api/user-data", authMiddleware, (req, res) => {
       debugParams: isolatedParams
     });
   } catch (err) {
-    res.status(400).json({
+    const statusCode = typeof err?.message === "string" && err.message.startsWith("Unauthorized") ? 401 : 400;
+    res.status(statusCode).json({
       status: "error",
       message: err.message
     });
