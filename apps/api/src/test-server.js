@@ -2,8 +2,10 @@ process.env.NODE_ENV = process.env.NODE_ENV || "development";
 process.env.BYPASS_AUTH = process.env.BYPASS_AUTH || "true";
 
 const app = require("./app");
+
+const PORT = Number(process.env.PORT || 3000);
+const server = app.listen(PORT, async () => {
   console.log(`Test server running on port ${PORT}`);
-  
   let passed = true;
 
   try {
