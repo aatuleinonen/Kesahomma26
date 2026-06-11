@@ -16,4 +16,17 @@ output "dynamodb_table_name" {
 output "dynamodb_table_arn" {
   value       = aws_dynamodb_table.single_table.arn
   description = "The ARN of the DynamoDB Single-Table."
+output "cognito_user_pool_id" {
+  value       = aws_cognito_user_pool.user_pool.id
+  description = "The ID of the Cognito User Pool."
+}
+
+output "cognito_user_pool_client_id" {
+  value       = aws_cognito_user_pool_client.user_pool_client.id
+  description = "The ID of the Cognito User Pool Client."
+}
+
+output "cognito_user_pool_endpoint" {
+  value       = aws_cognito_user_pool.user_pool.endpoint
+  description = "The endpoint of the Cognito User Pool."
 }

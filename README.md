@@ -145,3 +145,70 @@ We have provisioned an AWS Budget (`monthly-cost-budget`) configured for a maxim
 > [!IMPORTANT]
 > Since external AI API providers (such as OpenAI, Anthropic, or other third-party models) are billed completely outside of the AWS billing ecosystem, their costs **cannot** be monitored or alerted by AWS Budgets. 
 > To manage these expenses and avoid runaway charges, developers must manually set hard daily/monthly usage and billing limits directly within each respective AI provider's developer console.
+
+---
+
+## 6. Local Authentication & Testing (AWS Cognito)
+
+To test secure, private endpoints locally, you must provide a Cognito Identity Token (`IdToken`) in the `Authorization` header of your HTTP requests.
+
+### Option A: Local Bypass (No AWS Resources Required)
+
+For fast local development without connection to a live AWS Cognito environment:
+1. In `apps/api/.env`, verify that the following variables are set:
+   ```ini
+   NODE_ENV=development
+   BYPASS_AUTH=true
+   ```
+2. Send requests by passing any arbitrary token:
+   ```bash
+   curl -H "Authorization: Bearer dummy-token" http://localhost:3000/api/private
+   ```
+   The backend will bypass validation and respond with a mock developer identity.
+
+### Option B: Authenticating with Live AWS Cognito User Pool
+
+If you have deployed the Cognito infrastructure and want to test validation using a real token:
+1. **Retrieve Configurations**:
+   Check the Cognito User Pool ID and Client ID in the output of your local Terraform configuration or using AWS Parameter Store.
+2. **Setup Local Environment Variables**:
+   In `apps/api/.env`, configure the following and set `BYPASS_AUTH` to `false`:
+   ```ini
+   NODE_ENV=development
+   BYPASS_AUTH=false
+   COGNITO_USER_POOL_ID=your-user-pool-id
+   COGNITO_CLIENT_ID=your-user-pool-client-id
+   ```
+3. **Sign Up a Test User**:
+   ```bash
+   aws cognito-idp sign-up \
+     --client-id <your-user-pool-client-id> \
+     --username <test-email> \
+     --password <secure-password>
+   ```
+4. **Confirm the User Account**:
+   If email confirmation is not automated, you can manually verify the account via the CLI:
+   ```bash
+   aws cognito-idp admin-confirm-sign-up \
+     --user-pool-id <your-user-pool-id> \
+     --username <test-email>
+   ```
+5. **Generate an Identity Token (JWT)**:
+   Authenticate the user to fetch the JWT:
+   ```bash
+   aws cognito-idp initiate-auth \
+     --client-id <your-user-pool-client-id> \
+     --auth-flow USER_PASSWORD_AUTH \
+     --auth-parameters USERNAME=<test-email>,PASSWORD=<secure-password>
+   ```
+   Save the returned `AuthenticationResult.IdToken` string from the JSON output.
+6. **Request Protected Endpoints**:
+   Call the secure endpoints by adding the token to the header:
+   ```bash
+   # Test auth middleware:
+   curl -H "Authorization: Bearer <your-id-token>" http://localhost:3000/api/private
+
+   # Test database data isolation parameter generation:
+   curl -H "Authorization: Bearer <your-id-token>" http://localhost:3000/api/user-data
+   ```
+
