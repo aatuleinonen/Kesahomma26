@@ -35,7 +35,7 @@ resource "aws_cognito_user_pool_client" "user_pool_client" {
   name         = "kesahomma26-user-pool-client-${var.environment}"
   user_pool_id = aws_cognito_user_pool.user_pool.id
 
-  generate_secret     = false
+  generate_secret = false
   explicit_auth_flows = [
     "ALLOW_USER_PASSWORD_AUTH",
     "ALLOW_REFRESH_TOKEN_AUTH",
