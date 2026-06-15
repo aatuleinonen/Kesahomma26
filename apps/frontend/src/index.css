@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+/* Inter can be self-hosted if needed; rely on system font fallbacks by default to avoid an external font fetch. */
 
 :root {
   /* Color Palette */
