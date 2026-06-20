@@ -2,6 +2,8 @@ require("dotenv").config();
 const express = require("express");
 const { authMiddleware } = require("./middleware/auth");
 const { getUserId, buildIsolatedQueryParams } = require("./utils/db");
+const { putTransaction, getTransactions } = require("./utils/ddb");
+const { validateNewTransaction, calculatePortfolioState } = require("./utils/transactions");
 
 
 const app = express();
@@ -42,6 +44,95 @@ app.get("/api/user-data", authMiddleware, (req, res) => {
       userId,
       message: "Data isolation parameters generated successfully.",
       debugParams: isolatedParams
+    });
+  } catch (err) {
+    const statusCode = typeof err?.message === "string" && err.message.startsWith("Unauthorized") ? 401 : 400;
+    res.status(statusCode).json({
+      status: "error",
+      message: err.message
+    });
+  }
+});
+
+// Create a transaction for a specific portfolio
+app.post("/api/portfolios/:portfolioId/transactions", authMiddleware, async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const { portfolioId } = req.params;
+    const { type, ticker, quantity, price, amount, timestamp } = req.body;
+
+    const newTxn = {
+      type,
+      ticker,
+      quantity: quantity !== undefined ? parseFloat(quantity) : undefined,
+      price: price !== undefined ? parseFloat(price) : undefined,
+      amount: amount !== undefined ? parseFloat(amount) : undefined,
+      timestamp: timestamp || new Date().toISOString()
+    };
+
+    // Retrieve existing transactions to calculate balances and validate
+    const existingTxns = await getTransactions(userId, portfolioId);
+    
+    // Validate the new transaction
+    const validation = validateNewTransaction(newTxn, existingTxns);
+    if (!validation.valid) {
+      return res.status(400).json({
+        status: "error",
+        message: validation.error
+      });
+    }
+
+    // Save to database
+    const savedTxn = await putTransaction(userId, portfolioId, newTxn);
+
+    res.status(201).json({
+      status: "success",
+      transaction: savedTxn
+    });
+  } catch (err) {
+    const statusCode = typeof err?.message === "string" && err.message.startsWith("Unauthorized") ? 401 : 400;
+    res.status(statusCode).json({
+      status: "error",
+      message: err.message
+    });
+  }
+});
+
+// List all transactions for a specific portfolio
+app.get("/api/portfolios/:portfolioId/transactions", authMiddleware, async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const { portfolioId } = req.params;
+
+    const transactions = await getTransactions(userId, portfolioId);
+
+    res.json({
+      status: "success",
+      transactions
+    });
+  } catch (err) {
+    const statusCode = typeof err?.message === "string" && err.message.startsWith("Unauthorized") ? 401 : 400;
+    res.status(statusCode).json({
+      status: "error",
+      message: err.message
+    });
+  }
+});
+
+// Derive holdings and cash balance for a specific portfolio
+app.get("/api/portfolios/:portfolioId/holdings", authMiddleware, async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const { portfolioId } = req.params;
+
+    const transactions = await getTransactions(userId, portfolioId);
+    const portfolioState = calculatePortfolioState(transactions);
+
+    res.json({
+      status: "success",
+      portfolioId,
+      cashBalance: portfolioState.cashBalance,
+      holdings: portfolioState.holdings
     });
   } catch (err) {
     const statusCode = typeof err?.message === "string" && err.message.startsWith("Unauthorized") ? 401 : 400;
