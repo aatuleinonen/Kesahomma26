@@ -16,6 +16,18 @@ output "dynamodb_table_name" {
 output "dynamodb_table_arn" {
   value       = aws_dynamodb_table.single_table.arn
   description = "The ARN of the DynamoDB Single-Table."
+}
+
+output "kesahomma26_data_table_name" {
+  value       = aws_dynamodb_table.kesahomma26_data.name
+  description = "The name of the kesahomma26-data DynamoDB table."
+}
+
+output "kesahomma26_data_table_arn" {
+  value       = aws_dynamodb_table.kesahomma26_data.arn
+  description = "The ARN of the kesahomma26-data DynamoDB table."
+}
+
 output "cognito_user_pool_id" {
   value       = aws_cognito_user_pool.user_pool.id
   description = "The ID of the Cognito User Pool."
