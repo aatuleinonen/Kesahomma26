@@ -5,10 +5,7 @@ const tableName = process.env.DYNAMODB_TABLE_NAME || "kesahomma26-data";
 
 let ddbDocClient;
 // Enable mock database when running tests or if explicitly requested via environment variable.
-// Default to mock database if Cognito credentials are not fully set up for local development.
-const isMock = process.env.MOCK_DYNAMODB === "true" || 
-               process.env.NODE_ENV === "test" || 
-               (!process.env.AWS_ACCESS_KEY_ID && !process.env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI && !process.env.AWS_WEB_IDENTITY_TOKEN_FILE);
+const isMock = process.env.MOCK_DYNAMODB === "true" || process.env.NODE_ENV === "test";
 
 // In-memory datastore simulating the DynamoDB table
 const mockDb = [];
