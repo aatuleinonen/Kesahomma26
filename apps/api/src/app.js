@@ -90,10 +90,12 @@ app.post("/api/portfolios/:portfolioId/transactions", authMiddleware, async (req
       transaction: savedTxn
     });
   } catch (err) {
-    const statusCode = typeof err?.message === "string" && err.message.startsWith("Unauthorized") ? 401 : 400;
+    const statusCode =
+      typeof err?.message === "string" && err.message.startsWith("Unauthorized") ? 401 : 500;
+
     res.status(statusCode).json({
       status: "error",
-      message: err.message
+      message: statusCode === 500 ? "Internal Server Error" : err.message
     });
   }
 });
@@ -111,10 +113,12 @@ app.get("/api/portfolios/:portfolioId/transactions", authMiddleware, async (req,
       transactions
     });
   } catch (err) {
-    const statusCode = typeof err?.message === "string" && err.message.startsWith("Unauthorized") ? 401 : 400;
+    const statusCode =
+      typeof err?.message === "string" && err.message.startsWith("Unauthorized") ? 401 : 500;
+
     res.status(statusCode).json({
       status: "error",
-      message: err.message
+      message: statusCode === 500 ? "Internal Server Error" : err.message
     });
   }
 });
@@ -135,10 +139,12 @@ app.get("/api/portfolios/:portfolioId/holdings", authMiddleware, async (req, res
       holdings: portfolioState.holdings
     });
   } catch (err) {
-    const statusCode = typeof err?.message === "string" && err.message.startsWith("Unauthorized") ? 401 : 400;
+    const statusCode =
+      typeof err?.message === "string" && err.message.startsWith("Unauthorized") ? 401 : 500;
+
     res.status(statusCode).json({
       status: "error",
-      message: err.message
+      message: statusCode === 500 ? "Internal Server Error" : err.message
     });
   }
 });

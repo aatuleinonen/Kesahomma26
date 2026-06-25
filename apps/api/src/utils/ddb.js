@@ -5,10 +5,7 @@ const tableName = process.env.DYNAMODB_TABLE_NAME || "kesahomma26-data";
 
 let ddbDocClient;
 // Enable mock database when running tests or if explicitly requested via environment variable.
-// Default to mock database if Cognito credentials are not fully set up for local development.
-const isMock = process.env.MOCK_DYNAMODB === "true" || 
-               process.env.NODE_ENV === "test" || 
-               (!process.env.AWS_ACCESS_KEY_ID && !process.env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI && !process.env.AWS_WEB_IDENTITY_TOKEN_FILE);
+const isMock = process.env.MOCK_DYNAMODB === "true" || process.env.NODE_ENV === "test";
 
 // In-memory datastore simulating the DynamoDB table
 const mockDb = [];
@@ -43,20 +40,26 @@ async function putTransaction(userId, portfolioId, txn) {
     createdAt: new Date().toISOString()
   };
 
-  if (isMock || !ddbDocClient) {
-    // Overwrite if exact PK & SK exists (simulating PutItem replacement behaviour)
-    const index = mockDb.findIndex(i => i.PK === pk && i.SK === sk);
-    if (index > -1) {
-      mockDb[index] = item;
-    } else {
-      mockDb.push(item);
+  if (isMock) {
+    // Mimic DynamoDB conditional writes: do not allow overwriting an existing transaction with the same PK+SK.
+    const exists = mockDb.some(i => i.PK === pk && i.SK === sk);
+    if (exists) {
+      const err = new Error("Transaction already exists for the given timestamp");
+      err.name = "ConditionalCheckFailedException";
+      throw err;
     }
+    mockDb.push(item);
     return item;
+  }
+
+  if (!ddbDocClient) {
+    throw new Error("DynamoDB client is not initialized");
   }
 
   await ddbDocClient.send(new PutCommand({
     TableName: tableName,
-    Item: item
+    Item: item,
+    ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)"
   }));
   return item;
 }
@@ -72,13 +75,16 @@ async function getTransactions(userId, portfolioId) {
   const pk = `USER#${userId}`;
   const skPrefix = `PORTFOLIO#${portfolioId}#TXN#`;
 
-  if (isMock || !ddbDocClient) {
+  if (isMock) {
     // Filter by partition key and sort key prefix, then sort lexicographically by SK (chronological)
     return mockDb
       .filter(i => i.PK === pk && i.SK.startsWith(skPrefix))
       .sort((a, b) => a.SK.localeCompare(b.SK));
   }
 
+  if (!ddbDocClient) {
+    throw new Error("DynamoDB client is not initialized");
+  }
   const response = await ddbDocClient.send(new QueryCommand({
     TableName: tableName,
     KeyConditionExpression: "PK = :pk AND begins_with(SK, :skPrefix)",
