@@ -40,20 +40,26 @@ async function putTransaction(userId, portfolioId, txn) {
     createdAt: new Date().toISOString()
   };
 
-  if (isMock || !ddbDocClient) {
-    // Overwrite if exact PK & SK exists (simulating PutItem replacement behaviour)
-    const index = mockDb.findIndex(i => i.PK === pk && i.SK === sk);
-    if (index > -1) {
-      mockDb[index] = item;
-    } else {
-      mockDb.push(item);
+  if (isMock) {
+    // Mimic DynamoDB conditional writes: do not allow overwriting an existing transaction with the same PK+SK.
+    const exists = mockDb.some(i => i.PK === pk && i.SK === sk);
+    if (exists) {
+      const err = new Error("Transaction already exists for the given timestamp");
+      err.name = "ConditionalCheckFailedException";
+      throw err;
     }
+    mockDb.push(item);
     return item;
+  }
+
+  if (!ddbDocClient) {
+    throw new Error("DynamoDB client is not initialized");
   }
 
   await ddbDocClient.send(new PutCommand({
     TableName: tableName,
-    Item: item
+    Item: item,
+    ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)"
   }));
   return item;
 }
