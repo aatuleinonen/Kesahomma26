@@ -88,6 +88,12 @@ function validateNewTransaction(newTxn, existingTxns) {
   if (isNaN(amount)) {
     amount = quantity * price;
   }
+  if (amount <= 0) {
+    return {
+      valid: false,
+      error: "Amount must be greater than 0"
+    };
+  }
 
   // Validate generic types
   const validTypes = ["buy", "sell", "deposit", "withdrawal", "dividend", "fee"];
