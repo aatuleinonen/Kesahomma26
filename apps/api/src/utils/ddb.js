@@ -75,13 +75,16 @@ async function getTransactions(userId, portfolioId) {
   const pk = `USER#${userId}`;
   const skPrefix = `PORTFOLIO#${portfolioId}#TXN#`;
 
-  if (isMock || !ddbDocClient) {
+  if (isMock) {
     // Filter by partition key and sort key prefix, then sort lexicographically by SK (chronological)
     return mockDb
       .filter(i => i.PK === pk && i.SK.startsWith(skPrefix))
       .sort((a, b) => a.SK.localeCompare(b.SK));
   }
 
+  if (!ddbDocClient) {
+    throw new Error("DynamoDB client is not initialized");
+  }
   const response = await ddbDocClient.send(new QueryCommand({
     TableName: tableName,
     KeyConditionExpression: "PK = :pk AND begins_with(SK, :skPrefix)",
