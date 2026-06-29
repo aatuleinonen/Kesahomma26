@@ -1,5 +1,5 @@
 const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
-const { DynamoDBDocumentClient, PutCommand, QueryCommand } = require("@aws-sdk/lib-dynamodb");
+const { DynamoDBDocumentClient, PutCommand, QueryCommand, DeleteCommand } = require("@aws-sdk/lib-dynamodb");
 
 const tableName = process.env.DYNAMODB_TABLE_NAME || "kesahomma26-data";
 
@@ -99,6 +99,185 @@ async function getTransactions(userId, portfolioId) {
 }
 
 /**
+ * Retrieves all portfolios for a user.
+ * 
+ * @param {string} userId - Cognito User ID (sub)
+ * @returns {Promise<Array>} List of portfolio metadata items.
+ */
+async function getPortfolios(userId) {
+  const pk = `USER#${userId}`;
+  const skPrefix = "PORTFOLIO#";
+
+  if (isMock) {
+    return mockDb
+      .filter(i => i.PK === pk && i.SK.startsWith(skPrefix) && i.SK.endsWith("#METADATA"))
+      .sort((a, b) => a.SK.localeCompare(b.SK));
+  }
+
+  if (!ddbDocClient) {
+    throw new Error("DynamoDB client is not initialized");
+  }
+
+  const response = await ddbDocClient.send(new QueryCommand({
+    TableName: tableName,
+    KeyConditionExpression: "PK = :pk AND begins_with(SK, :skPrefix)",
+    ExpressionAttributeValues: {
+      ":pk": pk,
+      ":skPrefix": skPrefix
+    }
+  }));
+
+  return (response.Items || [])
+    .filter(i => i.SK.endsWith("#METADATA"))
+    .sort((a, b) => a.SK.localeCompare(b.SK));
+}
+
+/**
+ * Saves a portfolio metadata item.
+ * 
+ * @param {string} userId - Cognito User ID (sub)
+ * @param {object} portfolio - Portfolio metadata
+ * @returns {Promise<object>} The saved portfolio item.
+ */
+async function putPortfolio(userId, portfolio) {
+  const pk = `USER#${userId}`;
+  const sk = `PORTFOLIO#${portfolio.portfolioId}#METADATA`;
+  const item = {
+    PK: pk,
+    SK: sk,
+    ...portfolio,
+    createdAt: portfolio.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+
+  if (isMock) {
+    const exists = mockDb.some(i => i.PK === pk && i.SK === sk);
+    if (exists) {
+      const err = new Error("Portfolio already exists");
+      err.name = "ConditionalCheckFailedException";
+      throw err;
+    }
+    mockDb.push(item);
+    return item;
+  }
+
+  if (!ddbDocClient) {
+    throw new Error("DynamoDB client is not initialized");
+  }
+
+  await ddbDocClient.send(new PutCommand({
+    TableName: tableName,
+    Item: item,
+    ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)"
+  }));
+  return item;
+}
+
+/**
+ * Deletes a transaction.
+ * 
+ * @param {string} userId - Cognito User ID (sub)
+ * @param {string} portfolioId - Portfolio ID
+ * @param {string} timestamp - Transaction timestamp
+ */
+async function deleteTransaction(userId, portfolioId, timestamp) {
+  const pk = `USER#${userId}`;
+  const sk = `PORTFOLIO#${portfolioId}#TXN#${timestamp}`;
+
+  if (isMock) {
+    const idx = mockDb.findIndex(i => i.PK === pk && i.SK === sk);
+    if (idx === -1) {
+      throw new Error("Transaction not found");
+    }
+    mockDb.splice(idx, 1);
+    return { pk, sk };
+  }
+
+  if (!ddbDocClient) {
+    throw new Error("DynamoDB client is not initialized");
+  }
+
+  await ddbDocClient.send(new DeleteCommand({
+    TableName: tableName,
+    Key: { PK: pk, SK: sk }
+  }));
+  return { pk, sk };
+}
+
+/**
+ * Updates a transaction. If timestamp changes, deletes the old transaction first.
+ * 
+ * @param {string} userId - Cognito User ID (sub)
+ * @param {string} portfolioId - Portfolio ID
+ * @param {string} oldTimestamp - Original transaction timestamp
+ * @param {object} newTxn - Updated transaction object
+ * @returns {Promise<object>} The saved transaction item.
+ */
+async function updateTransaction(userId, portfolioId, oldTimestamp, newTxn) {
+  const pk = `USER#${userId}`;
+  const oldSk = `PORTFOLIO#${portfolioId}#TXN#${oldTimestamp}`;
+  const newSk = `PORTFOLIO#${portfolioId}#TXN#${newTxn.timestamp}`;
+
+  const item = {
+    PK: pk,
+    SK: newSk,
+    portfolioId,
+    ...newTxn,
+    updatedAt: new Date().toISOString()
+  };
+
+  if (isMock) {
+    const oldIdx = mockDb.findIndex(i => i.PK === pk && i.SK === oldSk);
+    if (oldIdx === -1) {
+      throw new Error("Original transaction not found");
+    }
+
+    if (oldSk !== newSk) {
+      // Check if new destination already exists
+      const newExists = mockDb.some(i => i.PK === pk && i.SK === newSk);
+      if (newExists) {
+        const err = new Error("Transaction already exists for the target timestamp");
+        err.name = "ConditionalCheckFailedException";
+        throw err;
+      }
+      // Remove old, add new
+      mockDb.splice(oldIdx, 1);
+      mockDb.push(item);
+    } else {
+      // Replace in place
+      mockDb[oldIdx] = item;
+    }
+    return item;
+  }
+
+  if (!ddbDocClient) {
+    throw new Error("DynamoDB client is not initialized");
+  }
+
+  if (oldSk !== newSk) {
+    // Delete old, then put new
+    await ddbDocClient.send(new DeleteCommand({
+      TableName: tableName,
+      Key: { PK: pk, SK: oldSk }
+    }));
+
+    await ddbDocClient.send(new PutCommand({
+      TableName: tableName,
+      Item: item,
+      ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)"
+    }));
+  } else {
+    // Update/put directly
+    await ddbDocClient.send(new PutCommand({
+      TableName: tableName,
+      Item: item
+    }));
+  }
+
+  return item;
+}
+
+/**
  * Resets the in-memory database. Useful for clean test environments.
  */
 function clearMockDb() {
@@ -108,6 +287,10 @@ function clearMockDb() {
 module.exports = {
   putTransaction,
   getTransactions,
+  getPortfolios,
+  putPortfolio,
+  deleteTransaction,
+  updateTransaction,
   clearMockDb,
   isMock
 };
