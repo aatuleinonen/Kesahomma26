@@ -2,8 +2,8 @@ require("dotenv").config();
 const express = require("express");
 const { authMiddleware } = require("./middleware/auth");
 const { getUserId, buildIsolatedQueryParams } = require("./utils/db");
-const { putTransaction, getTransactions } = require("./utils/ddb");
-const { validateNewTransaction, calculatePortfolioState } = require("./utils/transactions");
+const { putTransaction, getTransactions, getPortfolios, putPortfolio, deleteTransaction, updateTransaction } = require("./utils/ddb");
+const { validateNewTransaction, calculatePortfolioState, validateTransactionsState } = require("./utils/transactions");
 
 
 const app = express();
@@ -137,6 +137,170 @@ app.get("/api/portfolios/:portfolioId/holdings", authMiddleware, async (req, res
       portfolioId,
       cashBalance: portfolioState.cashBalance,
       holdings: portfolioState.holdings
+    });
+  } catch (err) {
+    const statusCode =
+      typeof err?.message === "string" && err.message.startsWith("Unauthorized") ? 401 : 500;
+
+    res.status(statusCode).json({
+      status: "error",
+      message: statusCode === 500 ? "Internal Server Error" : err.message
+    });
+  }
+});
+
+// Get all portfolios for a user
+app.get("/api/portfolios", authMiddleware, async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const portfolios = await getPortfolios(userId);
+    res.json({
+      status: "success",
+      portfolios
+    });
+  } catch (err) {
+    const statusCode =
+      typeof err?.message === "string" && err.message.startsWith("Unauthorized") ? 401 : 500;
+
+    res.status(statusCode).json({
+      status: "error",
+      message: statusCode === 500 ? "Internal Server Error" : err.message
+    });
+  }
+});
+
+// Create a new portfolio
+app.post("/api/portfolios", authMiddleware, async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const { portfolioId, name, description, baseCurrency, costBasisMethod } = req.body;
+
+    if (!portfolioId || !name) {
+      return res.status(400).json({
+        status: "error",
+        message: "portfolioId and name are required fields"
+      });
+    }
+
+    const portfolio = {
+      portfolioId,
+      name,
+      description: description || "",
+      baseCurrency: baseCurrency || "EUR",
+      costBasisMethod: costBasisMethod || "FIFO"
+    };
+
+    const savedPortfolio = await putPortfolio(userId, portfolio);
+    res.status(201).json({
+      status: "success",
+      portfolio: savedPortfolio
+    });
+  } catch (err) {
+    const statusCode =
+      typeof err?.message === "string" && err.message.startsWith("Unauthorized") ? 401 : 500;
+
+    res.status(statusCode).json({
+      status: "error",
+      message: statusCode === 500 ? "Internal Server Error" : err.message
+    });
+  }
+});
+
+// Update a transaction
+app.put("/api/portfolios/:portfolioId/transactions/:timestamp", authMiddleware, async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const { portfolioId, timestamp: oldTimestamp } = req.params;
+    const { type, ticker, quantity, price, amount, timestamp: newTimestamp } = req.body;
+
+    const updatedTxn = {
+      type,
+      ticker,
+      quantity: quantity !== undefined ? parseFloat(quantity) : undefined,
+      price: price !== undefined ? parseFloat(price) : undefined,
+      amount: amount !== undefined ? parseFloat(amount) : undefined,
+      timestamp: newTimestamp || oldTimestamp
+    };
+
+    // Retrieve all existing transactions for this portfolio
+    const existingTxns = await getTransactions(userId, portfolioId);
+    
+    // Filter out the old transaction to simulate state after update
+    const filteredTxns = existingTxns.filter(t => t.timestamp !== oldTimestamp);
+    
+    // Validate updated transaction locally (like validation on add)
+    const validation = validateNewTransaction(updatedTxn, filteredTxns);
+    if (!validation.valid) {
+      return res.status(400).json({
+        status: "error",
+        message: validation.error
+      });
+    }
+
+    // Check chronologically if updated state is valid
+    const combinedTxns = [...filteredTxns, updatedTxn];
+    const ledgerValidation = validateTransactionsState(combinedTxns);
+    if (!ledgerValidation.valid) {
+      return res.status(400).json({
+        status: "error",
+        message: ledgerValidation.error
+      });
+    }
+
+    // Update in database
+    const savedTxn = await updateTransaction(userId, portfolioId, oldTimestamp, updatedTxn);
+
+    res.json({
+      status: "success",
+      transaction: savedTxn
+    });
+  } catch (err) {
+    const statusCode =
+      typeof err?.message === "string" && err.message.startsWith("Unauthorized") ? 401 : 500;
+
+    res.status(statusCode).json({
+      status: "error",
+      message: statusCode === 500 ? "Internal Server Error" : err.message
+    });
+  }
+});
+
+// Delete a transaction
+app.delete("/api/portfolios/:portfolioId/transactions/:timestamp", authMiddleware, async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const { portfolioId, timestamp } = req.params;
+
+    // Retrieve existing transactions
+    const existingTxns = await getTransactions(userId, portfolioId);
+
+    // Check if transaction exists
+    const exists = existingTxns.some(t => t.timestamp === timestamp);
+    if (!exists) {
+      return res.status(404).json({
+        status: "error",
+        message: "Transaction not found"
+      });
+    }
+
+    // Filter out this transaction
+    const remainingTxns = existingTxns.filter(t => t.timestamp !== timestamp);
+
+    // Validate remaining sequence chronologically
+    const ledgerValidation = validateTransactionsState(remainingTxns);
+    if (!ledgerValidation.valid) {
+      return res.status(400).json({
+        status: "error",
+        message: `Cannot delete transaction. ${ledgerValidation.error}`
+      });
+    }
+
+    // Delete from database
+    await deleteTransaction(userId, portfolioId, timestamp);
+
+    res.json({
+      status: "success",
+      message: "Transaction deleted successfully"
     });
   } catch (err) {
     const statusCode =
