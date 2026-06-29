@@ -2,14 +2,19 @@
   "name": "@kesahomma26/api",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=20"
+  },
   "main": "src/app.js",
   "scripts": {
     "start": "node src/app.js",
     "build": "echo \"Building api...\"",
-    "test": "echo \"Testing api...\"",
+    "test": "node -e \"process.env.NODE_ENV='development'; const { spawnSync } = require('child_process'); const run = (s) => { const r = spawnSync('node', [s], { stdio: 'inherit', env: process.env }); if (r.status !== 0) process.exit(r.status || 1); }; run('src/test-server.js'); run('src/test-transactions.js');\"",
     "lint": "echo \"Linting api...\""
   },
   "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.1073.0",
+    "@aws-sdk/lib-dynamodb": "^3.1073.0",
     "aws-jwt-verify": "^4.0.1",
     "dotenv": "^16.4.5",
     "express": "^4.19.2"
