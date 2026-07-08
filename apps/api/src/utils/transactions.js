@@ -225,7 +225,7 @@ function validateTransactionsState(transactions) {
     if (cash < -1e-9) {
       return {
         valid: false,
-        error: `Insufficient cash at transaction timestamp ${txn.timestamp || txn.SK || "unknown"}. Balance: €${cash.toFixed(2)}`
+        error: `Insufficient cash at transaction timestamp ${txn.timestamp || txn.SK || "unknown"}. Balance: ${cash.toFixed(2)}`
       };
     }
 
