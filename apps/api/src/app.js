@@ -224,7 +224,15 @@ app.put("/api/portfolios/:portfolioId/transactions/:timestamp", authMiddleware, 
 
     // Retrieve all existing transactions for this portfolio
     const existingTxns = await getTransactions(userId, portfolioId);
-    
+
+    const oldTxn = existingTxns.find(t => t.timestamp === oldTimestamp);
+    if (!oldTxn) {
+      return res.status(404).json({
+        status: "error",
+        message: "Transaction not found"
+      });
+    }
+
     // Filter out the old transaction to simulate state after update
     const filteredTxns = existingTxns.filter(t => t.timestamp !== oldTimestamp);
     
