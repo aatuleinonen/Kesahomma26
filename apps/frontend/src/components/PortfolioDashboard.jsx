@@ -484,8 +484,10 @@ export default function PortfolioDashboard({ signOut, user }) {
                                 <td style={{ textAlign: 'right' }}>
                                   <div className="table-actions" style={{ justifyContent: 'flex-end' }}>
                                     <button 
+                                      type="button"
                                       className="action-btn edit" 
                                       onClick={() => handleOpenEditTxn(t)}
+                                      aria-label="Edit transaction"
                                       title="Edit entry"
                                     >
                                       ✏️
