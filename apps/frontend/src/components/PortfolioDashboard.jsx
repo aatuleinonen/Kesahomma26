@@ -8,6 +8,7 @@ export default function PortfolioDashboard({ signOut, user }) {
   const [holdings, setHoldings] = useState({});
   const [cashBalance, setCashBalance] = useState(0);
   const [transactions, setTransactions] = useState([]);
+  const [portfolioMetrics, setPortfolioMetrics] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -67,6 +68,7 @@ export default function PortfolioDashboard({ signOut, user }) {
 
       setHoldings(holdingsRes.holdings || {});
       setCashBalance(holdingsRes.cashBalance ?? 0);
+      setPortfolioMetrics(holdingsRes.metrics || null);
       setTransactions(transactionsRes.transactions || []);
     } catch (err) {
       console.error(err);
@@ -129,6 +131,19 @@ export default function PortfolioDashboard({ signOut, user }) {
   const portfolioTotalValue = parseFloat((holdingsTotalCost + cashBalance).toFixed(2));
   const currentPortfolio = portfolios.find(p => p.portfolioId === currentPortfolioId);
   const currencySymbol = currentPortfolio?.baseCurrency === 'USD' ? '$' : '€';
+
+  // Integration with backend portfolio calculations
+  const costBasisTotal = portfolioMetrics ? portfolioMetrics.totals.costBasis : portfolioTotalValue;
+  const currentValueTotal = portfolioMetrics ? portfolioMetrics.totals.currentValue : portfolioTotalValue;
+  const unrealizedGainLossTotal = portfolioMetrics ? portfolioMetrics.totals.unrealizedGainLoss : 0;
+  const unrealizedGainLossPctTotal = portfolioMetrics ? portfolioMetrics.totals.unrealizedGainLossPct : 0;
+
+  // Formatting trends for overview cards
+  const totalTrendClass = unrealizedGainLossTotal > 0.01 
+    ? 'stat-trend positive' 
+    : (unrealizedGainLossTotal < -0.01 ? 'stat-trend negative' : 'stat-trend neutral');
+  const totalTrendSign = unrealizedGainLossTotal > 0.01 ? '+' : '';
+  const totalTrendText = `${totalTrendSign}${currencySymbol}${unrealizedGainLossTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })} (${totalTrendSign}${unrealizedGainLossPctTotal.toFixed(2)}%)`;
 
   // Portfolio handlers
   const handleCreatePortfolio = async (e) => {
@@ -335,9 +350,18 @@ export default function PortfolioDashboard({ signOut, user }) {
             <div className="stats-grid">
               <div className="stat-card">
                 <span className="stat-icon">💰</span>
-                <h3>Portfolio Cost Basis</h3>
+                <h3>Portfolio Current Value</h3>
+                  {currencySymbol}{currentValueTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                </div>
+                <div className={totalTrendClass}>
+                  {totalTrendText}
+                </div>
+              </div>
+              <div className="stat-card">
+                <span className="stat-icon">📈</span>
+                <h3>Total Cost Basis</h3>
                 <div className="stat-value">
-                  {currencySymbol}{holdingsTotalCost.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  {currencySymbol}{costBasisTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}
                 </div>
                 <div className="stat-trend neutral">Valued in {currentPortfolio?.baseCurrency}</div>
               </div>
@@ -356,14 +380,6 @@ export default function PortfolioDashboard({ signOut, user }) {
                   {Object.keys(holdings).length}
                 </div>
                 <div className="stat-trend neutral">Distinct assets held</div>
-              </div>
-              <div className="stat-card">
-                <span className="stat-icon">📝</span>
-                <h3>Ledger Entries</h3>
-                <div className="stat-value">
-                  {transactions.length}
-                </div>
-                <div className="stat-trend neutral">Historical ledger entries</div>
               </div>
             </div>
 
@@ -386,19 +402,40 @@ export default function PortfolioDashboard({ signOut, user }) {
                     <div className="holdings-list">
                       {Object.entries(holdings).map(([ticker, qty]) => {
                         const metric = holdingsMetrics[ticker] || { averageCost: 0, totalCost: 0 };
-                        const allocPct = portfolioTotalValue > 0 ? ((metric.totalCost / portfolioTotalValue) * 100).toFixed(1) : 0;
                         
+                        // Backend calculations integration
+                        const assetMetric = portfolioMetrics?.holdings?.[ticker];
+                        const currentVal = assetMetric ? assetMetric.currentValue : metric.totalCost;
+                        const avgCost = assetMetric ? assetMetric.averageCost : metric.averageCost;
+                        const currentPrice = assetMetric ? assetMetric.currentPrice : metric.averageCost;
+                        const unrealizedGL = assetMetric ? assetMetric.unrealizedGainLoss : 0;
+                        const unrealizedGLPct = assetMetric ? assetMetric.unrealizedGainLossPct : 0;
+                        const allocPct = assetMetric 
+                          ? assetMetric.allocationPct 
+                          : (portfolioTotalValue > 0 ? parseFloat(((metric.totalCost / portfolioTotalValue) * 100).toFixed(2)) : 0);
+                        
+                        const assetTrendClass = unrealizedGL > 0.01 
+                          ? 'stat-trend positive' 
+                          : (unrealizedGL < -0.01 ? 'stat-trend negative' : 'stat-trend neutral');
+                        const assetTrendSign = unrealizedGL > 0.01 ? '+' : '';
+
                         return (
                           <div key={ticker} className="holding-item">
                             <div className="holding-info-row">
                               <span className="holding-ticker">{ticker}</span>
-                              <span className="holding-val">{currencySymbol}{metric.totalCost.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                              <span className="holding-val">{currencySymbol}{currentVal.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
                             </div>
                             <div className="holding-info-row">
                               <span className="holding-qty">{qty.toLocaleString()} shares</span>
-                              <span className="holding-avg-cost">Avg: {currencySymbol}{metric.averageCost.toFixed(2)}</span>
+                              <span className="holding-avg-cost">Avg: {currencySymbol}{avgCost.toFixed(2)}</span>
                             </div>
-                            <div className="allocation-bar-container">
+                            <div className="holding-info-row" style={{ fontSize: '0.85rem', marginTop: '2px' }}>
+                              <span style={{ color: 'var(--text-secondary)' }}>Price: {currencySymbol}{currentPrice.toFixed(2)}</span>
+                              <span className={assetTrendClass}>
+                                {assetTrendSign}{currencySymbol}{unrealizedGL.toLocaleString(undefined, { minimumFractionDigits: 2 })} ({assetTrendSign}{unrealizedGLPct.toFixed(2)}%)
+                              </span>
+                            </div>
+                            <div className="allocation-bar-container" style={{ marginTop: '6px' }}>
                               <div className="allocation-bar" style={{ width: `${allocPct}%` }}></div>
                             </div>
                             <div className="holding-info-row" style={{ fontSize: '0.75rem', marginTop: '-2px' }}>
@@ -417,14 +454,14 @@ export default function PortfolioDashboard({ signOut, user }) {
                           </div>
                           <div className="allocation-bar-container">
                             <div className="allocation-bar" style={{ 
-                              width: `${portfolioTotalValue > 0 ? ((cashBalance / portfolioTotalValue) * 100).toFixed(1) : 0}%`,
+                              width: `${portfolioMetrics ? portfolioMetrics.totals.cashAllocationPct : (portfolioTotalValue > 0 ? ((cashBalance / portfolioTotalValue) * 100).toFixed(2) : 0)}%`,
                               background: 'linear-gradient(90deg, #c5c6c7 0%, var(--text-primary) 100%)'
                             }}></div>
                           </div>
                           <div className="holding-info-row" style={{ fontSize: '0.75rem', marginTop: '-2px' }}>
                             <span style={{ color: 'var(--text-secondary)' }}>Cash allocation</span>
                             <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>
-                              {portfolioTotalValue > 0 ? ((cashBalance / portfolioTotalValue) * 100).toFixed(1) : 0}%
+                              {portfolioMetrics ? portfolioMetrics.totals.cashAllocationPct : (portfolioTotalValue > 0 ? ((cashBalance / portfolioTotalValue) * 100).toFixed(2) : 0)}%
                             </span>
                           </div>
                         </div>

@@ -3,7 +3,7 @@ const express = require("express");
 const { authMiddleware } = require("./middleware/auth");
 const { getUserId, buildIsolatedQueryParams } = require("./utils/db");
 const { putTransaction, getTransactions, getPortfolios, putPortfolio, deleteTransaction, updateTransaction } = require("./utils/ddb");
-const { validateNewTransaction, calculatePortfolioState, validateTransactionsState } = require("./utils/transactions");
+const { validateNewTransaction, calculatePortfolioState, validateTransactionsState, calculatePortfolioMetrics } = require("./utils/transactions");
 
 
 const app = express();
@@ -147,12 +147,14 @@ app.get("/api/portfolios/:portfolioId/holdings", authMiddleware, async (req, res
 
     const transactions = await getTransactions(userId, portfolioId);
     const portfolioState = calculatePortfolioState(transactions);
+    const metrics = calculatePortfolioMetrics(transactions);
 
     res.json({
       status: "success",
       portfolioId,
       cashBalance: portfolioState.cashBalance,
-      holdings: portfolioState.holdings
+      holdings: portfolioState.holdings,
+      metrics
     });
   } catch (err) {
     const statusCode =

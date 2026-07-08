@@ -304,6 +304,10 @@ body {
   color: var(--text-secondary);
 }
 
+.stat-trend.negative {
+  color: #f87171;
+}
+
 /* Quick Actions */
 .quick-actions h2 {
   font-size: 1.5rem;
