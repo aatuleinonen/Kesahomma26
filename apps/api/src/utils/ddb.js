@@ -255,16 +255,16 @@ async function updateTransaction(userId, portfolioId, oldTimestamp, newTxn) {
   }
 
   if (oldSk !== newSk) {
-    // Delete old, then put new
-    await ddbDocClient.send(new DeleteCommand({
-      TableName: tableName,
-      Key: { PK: pk, SK: oldSk }
-    }));
-
+    // Put new first (so a conditional failure does not delete the original), then delete old.
     await ddbDocClient.send(new PutCommand({
       TableName: tableName,
       Item: item,
       ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)"
+    }));
+
+    await ddbDocClient.send(new DeleteCommand({
+      TableName: tableName,
+      Key: { PK: pk, SK: oldSk }
     }));
   } else {
     // Update/put directly
