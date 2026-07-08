@@ -523,7 +523,7 @@ export default function PortfolioDashboard({ signOut, user }) {
           <div className="modal-container">
             <header className="modal-header">
               <h3>Create Investment Portfolio</h3>
-              <button className="modal-close-btn" onClick={() => setPortfolioModalOpen(false)}>×</button>
+              <button type="button" className="modal-close-btn" onClick={() => setPortfolioModalOpen(false)} aria-label="Close dialog">×</button>
             </header>
             <form onSubmit={handleCreatePortfolio}>
               <div className="modal-body">
