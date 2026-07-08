@@ -493,8 +493,10 @@ export default function PortfolioDashboard({ signOut, user }) {
                                       ✏️
                                     </button>
                                     <button 
+                                      type="button"
                                       className="action-btn delete" 
                                       onClick={() => handleDeleteTxn(t.timestamp)}
+                                      aria-label="Delete transaction"
                                       title="Delete entry"
                                     >
                                       🗑️
