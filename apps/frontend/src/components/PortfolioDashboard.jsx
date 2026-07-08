@@ -163,13 +163,18 @@ export default function PortfolioDashboard({ signOut, user }) {
   // Transaction handlers
   const handleOpenAddTxn = () => {
     setEditingTransaction(null);
+
+    const now = new Date();
+    const tzOffset = now.getTimezoneOffset() * 60000;
+    const localNow = new Date(now.getTime() - tzOffset);
+
     setTransactionForm({
       type: 'deposit',
       ticker: '',
       quantity: '',
       price: '',
       amount: '',
-      timestamp: new Date().toISOString().substring(0, 16) // format for datetime-local
+      timestamp: localNow.toISOString().substring(0, 16) // format for datetime-local (local time)
     });
     setFormError(null);
     setTransactionModalOpen(true);
