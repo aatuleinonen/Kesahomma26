@@ -106,11 +106,11 @@ async function getTransactions(userId, portfolioId) {
  */
 async function getPortfolios(userId) {
   const pk = `USER#${userId}`;
-  const skPrefix = "PORTFOLIO#";
+  const skPrefix = "METADATA#PORTFOLIO#";
 
   if (isMock) {
     return mockDb
-      .filter(i => i.PK === pk && i.SK.startsWith(skPrefix) && i.SK.endsWith("#METADATA"))
+      .filter(i => i.PK === pk && i.SK.startsWith(skPrefix))
       .sort((a, b) => a.SK.localeCompare(b.SK));
   }
 
@@ -128,7 +128,6 @@ async function getPortfolios(userId) {
   }));
 
   return (response.Items || [])
-    .filter(i => i.SK.endsWith("#METADATA"))
     .sort((a, b) => a.SK.localeCompare(b.SK));
 }
 
@@ -141,7 +140,7 @@ async function getPortfolios(userId) {
  */
 async function putPortfolio(userId, portfolio) {
   const pk = `USER#${userId}`;
-  const sk = `PORTFOLIO#${portfolio.portfolioId}#METADATA`;
+  const sk = `METADATA#PORTFOLIO#${portfolio.portfolioId || portfolio.id}`;
   const item = {
     PK: pk,
     SK: sk,
