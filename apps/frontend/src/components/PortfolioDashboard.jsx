@@ -591,7 +591,7 @@ export default function PortfolioDashboard({ signOut, user }) {
           <div className="modal-container">
             <header className="modal-header">
               <h3>{editingTransaction ? 'Edit Transaction Ledger Entry' : 'Record Transaction Ledger Entry'}</h3>
-              <button className="modal-close-btn" onClick={() => setTransactionModalOpen(false)}>×</button>
+              <button type="button" className="modal-close-btn" onClick={() => setTransactionModalOpen(false)} aria-label="Close dialog">×</button>
             </header>
             <form onSubmit={handleTransactionSubmit}>
               <div className="modal-body">
