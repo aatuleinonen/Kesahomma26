@@ -359,7 +359,7 @@ const unrealizedGainLossPctTotal = portfolioMetrics?.totals?.unrealizedGainLossP
               </div>
               <div className="stat-card">
                 <span className="stat-icon">📈</span>
-                <h3>Total Cost Basis</h3>
+<h3>Portfolio Book Value (at Cost)</h3>
                 <div className="stat-value">
                   {currencySymbol}{costBasisTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}
                 </div>
