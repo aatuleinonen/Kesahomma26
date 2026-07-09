@@ -133,11 +133,10 @@ export default function PortfolioDashboard({ signOut, user }) {
   const currencySymbol = currentPortfolio?.baseCurrency === 'USD' ? '$' : '€';
 
   // Integration with backend portfolio calculations
-  const costBasisTotal = portfolioMetrics ? portfolioMetrics.totals.costBasis : portfolioTotalValue;
-  const currentValueTotal = portfolioMetrics ? portfolioMetrics.totals.currentValue : portfolioTotalValue;
-  const unrealizedGainLossTotal = portfolioMetrics ? portfolioMetrics.totals.unrealizedGainLoss : 0;
-  const unrealizedGainLossPctTotal = portfolioMetrics ? portfolioMetrics.totals.unrealizedGainLossPct : 0;
-
+const costBasisTotal = portfolioMetrics?.totals?.costBasis ?? portfolioTotalValue;
+const currentValueTotal = portfolioMetrics?.totals?.currentValue ?? portfolioTotalValue;
+const unrealizedGainLossTotal = portfolioMetrics?.totals?.unrealizedGainLoss ?? 0;
+const unrealizedGainLossPctTotal = portfolioMetrics?.totals?.unrealizedGainLossPct ?? 0;
   // Formatting trends for overview cards
   const totalTrendClass = unrealizedGainLossTotal > 0.01 
     ? 'stat-trend positive' 
