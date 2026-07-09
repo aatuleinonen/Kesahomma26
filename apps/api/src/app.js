@@ -196,6 +196,13 @@ app.post("/api/portfolios", authMiddleware, async (req, res) => {
       portfolio: savedPortfolio
     });
   } catch (err) {
+    if (err?.name === "ConditionalCheckFailedException") {
+      return res.status(409).json({
+        status: "error",
+        message: err.message || "Portfolio already exists"
+      });
+    }
+
     const statusCode =
       typeof err?.message === "string" && err.message.startsWith("Unauthorized") ? 401 : 500;
 
