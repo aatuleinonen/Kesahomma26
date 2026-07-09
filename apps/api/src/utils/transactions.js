@@ -395,13 +395,14 @@ const currentPrice = currentPrices[ticker] !== undefined
   return {
     holdings: activeHoldings,
     cashBalance: finalCash,
-    totals: {
-      costBasis: portfolioCostBasis,
-      currentValue: portfolioCurrentValue,
-      unrealizedGainLoss: totalUnrealizedGainLoss,
-      unrealizedGainLossPct: totalUnrealizedGainLossPct,
-      cashAllocationPct
-    }
+totals: {
+  costBasis: portfolioCostBasis,
+  assetCostBasis: parseFloat(totalAssetCostBasis.toFixed(2)),
+  currentValue: portfolioCurrentValue,
+  unrealizedGainLoss: totalUnrealizedGainLoss,
+  unrealizedGainLossPct: totalUnrealizedGainLossPct,
+  cashAllocationPct
+}
   };
 }
 
