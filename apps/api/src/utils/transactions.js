@@ -347,11 +347,11 @@ function calculatePortfolioMetrics(transactions, currentPrices = {}) {
     const costBasis = parseFloat(h.totalCost.toFixed(2));
     const averageCost = parseFloat(h.averageCost.toFixed(4));
 
-    // Get current price from custom mapping, fallback to default mock prices, fallback to average cost
-    const currentPrice = currentPrices[ticker] !== undefined 
-      ? parseFloat(currentPrices[ticker])
-      : (DEFAULT_MOCK_PRICES[ticker] !== undefined ? DEFAULT_MOCK_PRICES[ticker] : averageCost);
-
+// Get current price from custom mapping, fallback to average cost (dev-only mock prices)
+const devMockPrice = process.env.NODE_ENV === "production" ? undefined : DEFAULT_MOCK_PRICES[ticker];
+const currentPrice = currentPrices[ticker] !== undefined
+  ? parseFloat(currentPrices[ticker])
+  : (devMockPrice !== undefined ? devMockPrice : averageCost);
     const currentValue = parseFloat((qty * currentPrice).toFixed(2));
     const unrealizedGainLoss = parseFloat((currentValue - costBasis).toFixed(2));
     const unrealizedGainLossPct = costBasis > 0 
