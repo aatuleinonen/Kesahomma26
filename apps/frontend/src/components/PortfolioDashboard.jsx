@@ -586,9 +586,9 @@ export default function PortfolioDashboard({ signOut, user }) {
       {/* --- Add/Edit Transaction Modal (Acceptance Criteria #2) --- */}
       {transactionModalOpen && (
         <div className="modal-overlay">
-          <div className="modal-container">
+          <div className="modal-container" role="dialog" aria-modal="true" aria-labelledby="transaction-ledger-title">
             <header className="modal-header">
-              <h3>{editingTransaction ? 'Edit Transaction Ledger Entry' : 'Record Transaction Ledger Entry'}</h3>
+              <h3 id="transaction-ledger-title">{editingTransaction ? 'Edit Transaction Ledger Entry' : 'Record Transaction Ledger Entry'}</h3>
               <button type="button" className="modal-close-btn" onClick={() => setTransactionModalOpen(false)} aria-label="Close dialog">×</button>
             </header>
             <form onSubmit={handleTransactionSubmit}>
