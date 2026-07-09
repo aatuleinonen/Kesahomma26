@@ -82,6 +82,22 @@ app.post("/api/portfolios/:portfolioId/transactions", authMiddleware, async (req
       });
     }
 
+    // Append the new transaction, sort chronologically, and run validateTransactionsState
+    const allTxns = [...existingTxns, newTxn];
+    allTxns.sort((a, b) => {
+      const timeA = a.timestamp || a.SK || "";
+      const timeB = b.timestamp || b.SK || "";
+      return timeA.localeCompare(timeB);
+    });
+
+    const chronologicalValidation = validateTransactionsState(allTxns);
+    if (!chronologicalValidation.valid) {
+      return res.status(400).json({
+        status: "error",
+        message: chronologicalValidation.error
+      });
+    }
+
     // Save to database
     const savedTxn = await putTransaction(userId, portfolioId, newTxn);
 

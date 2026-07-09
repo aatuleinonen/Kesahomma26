@@ -1,5 +1,5 @@
 const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
-const { DynamoDBDocumentClient, PutCommand, QueryCommand, DeleteCommand } = require("@aws-sdk/lib-dynamodb");
+const { DynamoDBDocumentClient, PutCommand, QueryCommand, DeleteCommand, TransactWriteCommand } = require("@aws-sdk/lib-dynamodb");
 
 const tableName = process.env.DYNAMODB_TABLE_NAME || "kesahomma26-data";
 
@@ -232,14 +232,14 @@ async function updateTransaction(userId, portfolioId, oldTimestamp, newTxn) {
     }
 
     if (oldSk !== newSk) {
-      // Check if new destination already exists
+      // Simulates atomic swap using TransactWriteCommand: check if new destination already exists
       const newExists = mockDb.some(i => i.PK === pk && i.SK === newSk);
       if (newExists) {
         const err = new Error("Transaction already exists for the target timestamp");
         err.name = "ConditionalCheckFailedException";
         throw err;
       }
-      // Remove old, add new
+      // Remove old and add new atomically in the mock database
       mockDb.splice(oldIdx, 1);
       mockDb.push(item);
     } else {
@@ -254,16 +254,22 @@ async function updateTransaction(userId, portfolioId, oldTimestamp, newTxn) {
   }
 
   if (oldSk !== newSk) {
-    // Put new first (so a conditional failure does not delete the original), then delete old.
-    await ddbDocClient.send(new PutCommand({
-      TableName: tableName,
-      Item: item,
-      ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)"
-    }));
-
-    await ddbDocClient.send(new DeleteCommand({
-      TableName: tableName,
-      Key: { PK: pk, SK: oldSk }
+    await ddbDocClient.send(new TransactWriteCommand({
+      TransactItems: [
+        {
+          Put: {
+            TableName: tableName,
+            Item: item,
+            ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)"
+          }
+        },
+        {
+          Delete: {
+            TableName: tableName,
+            Key: { PK: pk, SK: oldSk }
+          }
+        }
+      ]
     }));
   } else {
     // Update/put directly
