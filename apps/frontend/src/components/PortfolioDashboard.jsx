@@ -339,7 +339,7 @@ export default function PortfolioDashboard({ signOut, user }) {
                 <span className="stat-icon">💰</span>
                 <h3>Portfolio Cost Basis</h3>
                 <div className="stat-value">
-                  {currencySymbol}{portfolioTotalValue.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  {currencySymbol}{holdingsTotalCost.toLocaleString(undefined, { minimumFractionDigits: 2 })}
                 </div>
                 <div className="stat-trend neutral">Valued in {currentPortfolio?.baseCurrency}</div>
               </div>
