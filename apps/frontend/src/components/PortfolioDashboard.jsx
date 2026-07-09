@@ -36,7 +36,6 @@ export default function PortfolioDashboard({ signOut, user }) {
   const [formSubmitting, setFormSubmitting] = useState(false);
 
   const loadPortfolios = async () => {
-    await Promise.resolve();
     try {
       setLoading(true);
       setError(null);
