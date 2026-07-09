@@ -351,6 +351,7 @@ export default function PortfolioDashboard({ signOut, user }) {
               <div className="stat-card">
                 <span className="stat-icon">💰</span>
                 <h3>Portfolio Current Value</h3>
+                <div className="stat-value">
                   {currencySymbol}{currentValueTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}
                 </div>
                 <div className={totalTrendClass}>
