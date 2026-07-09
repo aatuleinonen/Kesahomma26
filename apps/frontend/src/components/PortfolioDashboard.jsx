@@ -56,7 +56,6 @@ export default function PortfolioDashboard({ signOut, user }) {
   };
 
   const loadPortfolioDetails = async (portfolioId) => {
-    await Promise.resolve();
     try {
       setLoading(true);
       setError(null);
