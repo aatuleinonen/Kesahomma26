@@ -270,6 +270,13 @@ app.put("/api/portfolios/:portfolioId/transactions/:timestamp", authMiddleware, 
       transaction: savedTxn
     });
   } catch (err) {
+    if (err?.name === "ConditionalCheckFailedException") {
+      return res.status(409).json({
+        status: "error",
+        message: err.message || "Transaction already exists for the target timestamp"
+      });
+    }
+
     const statusCode =
       typeof err?.message === "string" && err.message.startsWith("Unauthorized") ? 401 : 500;
 
