@@ -230,6 +230,17 @@ const server = app.listen(PORT, async () => {
     }
     console.log("  PASS: All transactions listed and properly sorted chronologically");
 
+    console.log("Test 20: Reject backdated withdrawal causing negative historical balance...");
+    const { status: s20, data: d20 } = await apiRequest("/api/portfolios/portfolio-1/transactions", "POST", {
+      type: "withdrawal",
+      amount: 1000,
+      timestamp: "2026-06-20T10:29:00.000Z"
+    });
+    if (s20 !== 400 || !d20.message.includes("Insufficient cash")) {
+      throw new Error(`Expected 400 validation error, got status ${s20}: ${JSON.stringify(d20)}`);
+    }
+    console.log("  PASS: Backdated withdrawal rejected");
+
     console.log("\n--- All Transaction tests passed! ---");
   } catch (err) {
     console.error("\nFAIL: Transaction integration tests failed with error:", err);

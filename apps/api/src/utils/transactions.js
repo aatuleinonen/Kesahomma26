@@ -166,7 +166,82 @@ function validateNewTransaction(newTxn, existingTxns) {
   return { valid: true };
 }
 
+/**
+ * Validates a list of transactions chronologically to ensure cash balance and holdings are never negative.
+ * 
+ * @param {Array} transactions - List of transactions
+ * @returns {object} Validation result: { valid, error }
+ */
+function validateTransactionsState(transactions) {
+  let cash = 0;
+  const holdings = {};
+  
+  // Sort them chronologically by timestamp (SK or timestamp)
+  const sortedTxns = [...transactions].sort((a, b) => {
+    const timeA = a.timestamp || a.SK || "";
+    const timeB = b.timestamp || b.SK || "";
+    return timeA.localeCompare(timeB);
+  });
+
+  for (const txn of sortedTxns) {
+    const type = (txn.type || "").toLowerCase();
+    const ticker = txn.ticker;
+    const quantity = parseFloat(txn.quantity) || 0;
+    const price = parseFloat(txn.price) || 0;
+    
+    let amount = parseFloat(txn.amount);
+    if (isNaN(amount)) {
+      amount = quantity * price;
+    }
+
+    switch (type) {
+      case "deposit":
+        cash += amount;
+        break;
+      case "withdrawal":
+        cash -= amount;
+        break;
+      case "dividend":
+        cash += amount;
+        break;
+      case "fee":
+        cash -= amount;
+        break;
+      case "buy":
+        if (ticker) {
+          holdings[ticker] = (holdings[ticker] || 0) + quantity;
+        }
+        cash -= amount;
+        break;
+      case "sell":
+        if (ticker) {
+          holdings[ticker] = (holdings[ticker] || 0) - quantity;
+        }
+        cash += amount;
+        break;
+    }
+
+    // Check for negative cash or negative holdings with float tolerance
+    if (cash < -1e-9) {
+      return {
+        valid: false,
+        error: `Insufficient cash at transaction timestamp ${txn.timestamp || txn.SK || "unknown"}. Balance: ${cash.toFixed(2)}`
+      };
+    }
+
+    if (ticker && holdings[ticker] < -1e-9) {
+      return {
+        valid: false,
+        error: `Insufficient shares for ${ticker} at transaction timestamp ${txn.timestamp || txn.SK || "unknown"}. Owned: ${holdings[ticker].toFixed(8)}`
+      };
+    }
+  }
+
+  return { valid: true };
+}
+
 module.exports = {
   calculatePortfolioState,
-  validateNewTransaction
+  validateNewTransaction,
+  validateTransactionsState
 };
