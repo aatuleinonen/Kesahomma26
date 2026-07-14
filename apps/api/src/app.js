@@ -4,6 +4,7 @@ const { authMiddleware } = require("./middleware/auth");
 const { getUserId, buildIsolatedQueryParams } = require("./utils/db");
 const { putTransaction, getTransactions, getPortfolios, putPortfolio, deleteTransaction, updateTransaction, createAnalysisJob, getAnalysisJob } = require("./utils/ddb");
 const { validateNewTransaction, calculatePortfolioState, validateTransactionsState } = require("./utils/transactions");
+const { processAnalysisJob } = require("@kesahomma26/agents");
 
 
 const app = express();
@@ -360,8 +361,8 @@ app.post("/api/portfolios/:portfolioId/analysis", authMiddleware, async (req, re
     // Create a new PENDING job record
     const job = await createAnalysisJob(userId, portfolioId);
 
-    // Simulate pushing a message to an internal SQS queue
-    console.log(`[SQS Simulation] Pushing job message for portfolioId: ${portfolioId}, jobId: ${job.jobId}`);
+    // Call the background worker (fire-and-forget)
+    processAnalysisJob(userId, portfolioId, job.jobId).catch(console.error);
 
     res.status(202).json({
       jobId: job.jobId,

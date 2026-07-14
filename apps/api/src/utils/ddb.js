@@ -1,6 +1,6 @@
 const crypto = require("crypto");
 const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
-const { DynamoDBDocumentClient, PutCommand, QueryCommand, DeleteCommand, TransactWriteCommand, GetCommand } = require("@aws-sdk/lib-dynamodb");
+const { DynamoDBDocumentClient, PutCommand, QueryCommand, DeleteCommand, TransactWriteCommand, GetCommand, UpdateCommand } = require("@aws-sdk/lib-dynamodb");
 
 const tableName = process.env.DYNAMODB_TABLE_NAME || "kesahomma26-data";
 
@@ -360,6 +360,63 @@ async function getAnalysisJob(userId, jobId) {
   return response.Items?.[0] || null;
 }
 
+/**
+ * Updates status, result, and error of an existing AI analysis job.
+ * 
+ * @param {string} userId - Cognito User ID (sub)
+ * @param {string} portfolioId - Portfolio ID
+ * @param {string} jobId - Job ID (UUID)
+ * @param {string} status - New job status ("PENDING" | "PROCESSING" | "COMPLETED" | "FAILED")
+ * @param {object|string|null} result - Results payload
+ * @param {string|null} error - Error message
+ * @returns {Promise<object>} The updated job item.
+ */
+async function updateAnalysisJob(userId, portfolioId, jobId, status, result = null, error = null) {
+  const pk = `USER#${userId}`;
+  const sk = `PORTFOLIO#${portfolioId}#ANALYSIS_JOB#${jobId}`;
+
+  if (isMock) {
+    const item = mockDb.find(i => i.PK === pk && i.SK === sk);
+    if (!item) {
+      throw new Error("Analysis job not found");
+    }
+    item.status = status;
+    item.result = result;
+    item.error = error;
+    item.updatedAt = new Date().toISOString();
+    return item;
+  }
+
+  if (!ddbDocClient) {
+    throw new Error("DynamoDB client is not initialized");
+  }
+
+  await ddbDocClient.send(new UpdateCommand({
+    TableName: tableName,
+    Key: { PK: pk, SK: sk },
+    UpdateExpression: "SET #status = :status, #result = :result, #error = :error, #updatedAt = :updatedAt",
+    ExpressionAttributeNames: {
+      "#status": "status",
+      "#result": "result",
+      "#error": "error",
+      "#updatedAt": "updatedAt"
+    },
+    ExpressionAttributeValues: {
+      ":status": status,
+      ":result": result,
+      ":error": error,
+      ":updatedAt": new Date().toISOString()
+    }
+  }));
+
+  // Fetch and return the updated item
+  const response = await ddbDocClient.send(new GetCommand({
+    TableName: tableName,
+    Key: { PK: pk, SK: sk }
+  }));
+  return response.Item;
+}
+
 module.exports = {
   putTransaction,
   getTransactions,
@@ -370,5 +427,6 @@ module.exports = {
   clearMockDb,
   createAnalysisJob,
   getAnalysisJob,
+  updateAnalysisJob,
   isMock
 };
