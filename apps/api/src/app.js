@@ -2,7 +2,7 @@ require("dotenv").config();
 const express = require("express");
 const { authMiddleware } = require("./middleware/auth");
 const { getUserId, buildIsolatedQueryParams } = require("./utils/db");
-const { putTransaction, getTransactions, getPortfolios, putPortfolio, deleteTransaction, updateTransaction } = require("./utils/ddb");
+const { putTransaction, getTransactions, getPortfolios, putPortfolio, deleteTransaction, updateTransaction, createAnalysisJob, getAnalysisJob } = require("./utils/ddb");
 const { validateNewTransaction, calculatePortfolioState, validateTransactionsState } = require("./utils/transactions");
 
 
@@ -339,6 +339,69 @@ app.delete("/api/portfolios/:portfolioId/transactions/:timestamp", authMiddlewar
     res.json({
       status: "success",
       message: "Transaction deleted successfully"
+    });
+  } catch (err) {
+    const statusCode =
+      typeof err?.message === "string" && err.message.startsWith("Unauthorized") ? 401 : 500;
+
+    res.status(statusCode).json({
+      status: "error",
+      message: statusCode === 500 ? "Internal Server Error" : err.message
+    });
+  }
+});
+
+// Start an asynchronous AI analysis job for a specific portfolio
+app.post("/api/portfolios/:portfolioId/analysis", authMiddleware, async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const { portfolioId } = req.params;
+
+    // Create a new PENDING job record
+    const job = await createAnalysisJob(userId, portfolioId);
+
+    // Simulate pushing a message to an internal SQS queue
+    console.log(`[SQS Simulation] Pushing job message for portfolioId: ${portfolioId}, jobId: ${job.jobId}`);
+
+    res.status(202).json({
+      jobId: job.jobId,
+      status: "PENDING"
+    });
+  } catch (err) {
+    const statusCode =
+      typeof err?.message === "string" && err.message.startsWith("Unauthorized") ? 401 : 500;
+
+    res.status(statusCode).json({
+      status: "error",
+      message: statusCode === 500 ? "Internal Server Error" : err.message
+    });
+  }
+});
+
+// Get status and results of a specific analysis job
+app.get("/api/analysis/jobs/:jobId", authMiddleware, async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const { jobId } = req.params;
+
+    const job = await getAnalysisJob(userId, jobId);
+    if (!job) {
+      return res.status(404).json({
+        status: "error",
+        message: "Job not found"
+      });
+    }
+
+    res.json({
+      status: "success",
+      job: {
+        jobId: job.jobId,
+        status: job.status,
+        portfolioId: job.portfolioId,
+        result: job.result,
+        error: job.error,
+        createdAt: job.createdAt
+      }
     });
   } catch (err) {
     const statusCode =

@@ -1,5 +1,6 @@
+const crypto = require("crypto");
 const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
-const { DynamoDBDocumentClient, PutCommand, QueryCommand, DeleteCommand, TransactWriteCommand } = require("@aws-sdk/lib-dynamodb");
+const { DynamoDBDocumentClient, PutCommand, QueryCommand, DeleteCommand, TransactWriteCommand, GetCommand } = require("@aws-sdk/lib-dynamodb");
 
 const tableName = process.env.DYNAMODB_TABLE_NAME || "kesahomma26-data";
 
@@ -289,6 +290,76 @@ function clearMockDb() {
   mockDb.length = 0;
 }
 
+/**
+ * Creates a new asynchronous AI analysis job.
+ * 
+ * @param {string} userId - Cognito User ID (sub)
+ * @param {string} portfolioId - Portfolio ID
+ * @returns {Promise<object>} The created job item.
+ */
+async function createAnalysisJob(userId, portfolioId) {
+  const jobId = crypto.randomUUID();
+  const pk = `USER#${userId}`;
+  const sk = `PORTFOLIO#${portfolioId}#ANALYSIS_JOB#${jobId}`;
+  const item = {
+    PK: pk,
+    SK: sk,
+    jobId,
+    type: "ai_analysis",
+    status: "PENDING",
+    portfolioId,
+    result: null,
+    error: null,
+    createdAt: new Date().toISOString()
+  };
+
+  if (isMock) {
+    mockDb.push(item);
+    return item;
+  }
+
+  if (!ddbDocClient) {
+    throw new Error("DynamoDB client is not initialized");
+  }
+
+  await ddbDocClient.send(new PutCommand({
+    TableName: tableName,
+    Item: item
+  }));
+  return item;
+}
+
+/**
+ * Retrieves an analysis job by its jobId for a user.
+ * 
+ * @param {string} userId - Cognito User ID (sub)
+ * @param {string} jobId - Job ID (UUID)
+ * @returns {Promise<object|null>} The job item, or null if not found.
+ */
+async function getAnalysisJob(userId, jobId) {
+  const pk = `USER#${userId}`;
+
+  if (isMock) {
+    return mockDb.find(i => i.PK === pk && i.SK.endsWith(`#ANALYSIS_JOB#${jobId}`)) || null;
+  }
+
+  if (!ddbDocClient) {
+    throw new Error("DynamoDB client is not initialized");
+  }
+
+  const response = await ddbDocClient.send(new QueryCommand({
+    TableName: tableName,
+    KeyConditionExpression: "PK = :pk",
+    FilterExpression: "contains(SK, :skSuffix)",
+    ExpressionAttributeValues: {
+      ":pk": pk,
+      ":skSuffix": `#ANALYSIS_JOB#${jobId}`
+    }
+  }));
+
+  return response.Items?.[0] || null;
+}
+
 module.exports = {
   putTransaction,
   getTransactions,
@@ -297,5 +368,7 @@ module.exports = {
   deleteTransaction,
   updateTransaction,
   clearMockDb,
+  createAnalysisJob,
+  getAnalysisJob,
   isMock
 };
