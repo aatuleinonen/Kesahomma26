@@ -304,6 +304,8 @@ async function createAnalysisJob(userId, portfolioId) {
   const item = {
     PK: pk,
     SK: sk,
+    GSI1PK: `USER#${userId}#ANALYSIS_JOB#${jobId}`,
+    GSI1SK: `PORTFOLIO#${portfolioId}`,
     jobId,
     type: "ai_analysis",
     status: "PENDING",
@@ -337,10 +339,10 @@ async function createAnalysisJob(userId, portfolioId) {
  * @returns {Promise<object|null>} The job item, or null if not found.
  */
 async function getAnalysisJob(userId, jobId) {
-  const pk = `USER#${userId}`;
+  const gsi1pk = `USER#${userId}#ANALYSIS_JOB#${jobId}`;
 
   if (isMock) {
-    return mockDb.find(i => i.PK === pk && i.SK.endsWith(`#ANALYSIS_JOB#${jobId}`)) || null;
+    return mockDb.find(i => i.GSI1PK === gsi1pk) || null;
   }
 
   if (!ddbDocClient) {
@@ -349,11 +351,10 @@ async function getAnalysisJob(userId, jobId) {
 
   const response = await ddbDocClient.send(new QueryCommand({
     TableName: tableName,
-    KeyConditionExpression: "PK = :pk",
-    FilterExpression: "contains(SK, :skSuffix)",
+    IndexName: "GSI1",
+    KeyConditionExpression: "GSI1PK = :gsi1pk",
     ExpressionAttributeValues: {
-      ":pk": pk,
-      ":skSuffix": `#ANALYSIS_JOB#${jobId}`
+      ":gsi1pk": gsi1pk
     }
   }));
 
