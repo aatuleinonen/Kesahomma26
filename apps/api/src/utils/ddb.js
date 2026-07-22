@@ -348,17 +348,28 @@ async function getAnalysisJob(userId, jobId) {
     throw new Error("DynamoDB client is not initialized");
   }
 
-  const response = await ddbDocClient.send(new QueryCommand({
-    TableName: tableName,
-    KeyConditionExpression: "PK = :pk",
-    FilterExpression: "jobId = :jobId",
-    ExpressionAttributeValues: {
-      ":pk": pk,
-      ":jobId": jobId
-    }
-  }));
+  let lastEvaluatedKey;
+  do {
+    const response = await ddbDocClient.send(new QueryCommand({
+      TableName: tableName,
+      KeyConditionExpression: "PK = :pk",
+      FilterExpression: "jobId = :jobId",
+      ExpressionAttributeValues: {
+        ":pk": pk,
+        ":jobId": jobId
+      },
+      ExclusiveStartKey: lastEvaluatedKey,
+      // Limit applies before FilterExpression; keep it small to reduce read cost per page.
+      Limit: 25
+    }));
 
-  return response.Items?.[0] || null;
+    const found = response.Items?.[0];
+    if (found) return found;
+
+    lastEvaluatedKey = response.LastEvaluatedKey;
+  } while (lastEvaluatedKey);
+
+  return null;
 }
 
 module.exports = {
