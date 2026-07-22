@@ -1,6 +1,6 @@
 const crypto = require("crypto");
 const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
-const { DynamoDBDocumentClient, PutCommand, QueryCommand, DeleteCommand, TransactWriteCommand, GetCommand } = require("@aws-sdk/lib-dynamodb");
+const { DynamoDBDocumentClient, PutCommand, QueryCommand, DeleteCommand, TransactWriteCommand } = require("@aws-sdk/lib-dynamodb");
 
 const tableName = process.env.DYNAMODB_TABLE_NAME || "kesahomma26-data";
 
@@ -324,7 +324,8 @@ async function createAnalysisJob(userId, portfolioId) {
 
   await ddbDocClient.send(new PutCommand({
     TableName: tableName,
-    Item: item
+    Item: item,
+    ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)"
   }));
   return item;
 }
@@ -340,7 +341,7 @@ async function getAnalysisJob(userId, jobId) {
   const pk = `USER#${userId}`;
 
   if (isMock) {
-    return mockDb.find(i => i.PK === pk && i.SK.endsWith(`#ANALYSIS_JOB#${jobId}`)) || null;
+    return mockDb.find(i => i.PK === pk && i.jobId === jobId) || null;
   }
 
   if (!ddbDocClient) {
@@ -350,10 +351,10 @@ async function getAnalysisJob(userId, jobId) {
   const response = await ddbDocClient.send(new QueryCommand({
     TableName: tableName,
     KeyConditionExpression: "PK = :pk",
-    FilterExpression: "contains(SK, :skSuffix)",
+    FilterExpression: "jobId = :jobId",
     ExpressionAttributeValues: {
       ":pk": pk,
-      ":skSuffix": `#ANALYSIS_JOB#${jobId}`
+      ":jobId": jobId
     }
   }));
 
