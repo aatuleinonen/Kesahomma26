@@ -9,5 +9,13 @@
     "build": "npm run build --workspaces",
     "test": "npm run test --workspaces",
     "lint": "npm run lint --workspaces"
+  },
+  "devDependencies": {
+    "@aws-sdk/client-cloudfront": "^3.1093.0",
+    "@aws-sdk/client-lambda": "^3.1093.0",
+    "@aws-sdk/client-s3": "^3.1093.0",
+    "archiver": "^8.0.0",
+    "esbuild": "^0.28.0",
+    "node": "^20.20.2"
   }
 }

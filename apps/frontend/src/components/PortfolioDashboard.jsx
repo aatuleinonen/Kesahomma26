@@ -46,6 +46,10 @@ export default function PortfolioDashboard({ signOut, user }) {
         // Default to first portfolio
         setCurrentPortfolioId(list[0].portfolioId);
       } else {
+        setCurrentPortfolioId('');
+        setHoldings({});
+        setCashBalance(0);
+        setTransactions([]);
         setLoading(false);
       }
     } catch (err) {
@@ -155,6 +159,24 @@ export default function PortfolioDashboard({ signOut, user }) {
       setFormError(err.message || 'Failed to create portfolio.');
     } finally {
       setFormSubmitting(false);
+    }
+  };
+
+  const handleDeletePortfolio = async () => {
+    if (!currentPortfolio) return;
+    const confirmed = window.confirm(
+      `Delete "${currentPortfolio.name}" and all of its transactions? This cannot be undone in the application.`
+    );
+    if (!confirmed) return;
+
+    try {
+      setError(null);
+      setLoading(true);
+      await api.deletePortfolio(currentPortfolio.portfolioId);
+      await loadPortfolios();
+    } catch (err) {
+      setError(err.message || 'Failed to delete portfolio.');
+      setLoading(false);
     }
   };
 
@@ -289,6 +311,11 @@ export default function PortfolioDashboard({ signOut, user }) {
           <button className="btn-primary" onClick={() => setPortfolioModalOpen(true)}>
             <span>➕</span> New Portfolio
           </button>
+          {currentPortfolio && (
+            <button className="btn-danger" onClick={handleDeletePortfolio}>
+              Delete Portfolio
+            </button>
+          )}
           <span className="user-email" title="Logged in as">
             {user?.signInDetails?.loginId || user?.username || "Authenticated User"}
           </span>

@@ -30,7 +30,7 @@ async function request(path, options = {}) {
     }
   });
 
-  const data = await res.json();
+  const data = res.status === 204 ? null : await res.json();
   if (!res.ok) {
     throw new Error(data.message || `Request failed with status ${res.status}`);
   }
@@ -46,6 +46,11 @@ export const api = {
     return request('/api/portfolios', {
       method: 'POST',
       body: JSON.stringify(portfolio)
+    });
+  },
+  deletePortfolio(portfolioId) {
+    return request(`/api/portfolios/${portfolioId}`, {
+      method: "DELETE"
     });
   },
 
