@@ -324,9 +324,9 @@ async function createAnalysisJob(userId, portfolioId) {
 
   await ddbDocClient.send(new PutCommand({
     TableName: tableName,
-    Item: item
+    Item: item,
+    ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)"
   }));
-  return item;
 }
 
 /**
