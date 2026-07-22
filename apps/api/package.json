@@ -9,7 +9,7 @@
   "scripts": {
     "start": "node src/app.js",
     "build": "echo \"Building api...\"",
-    "test": "node -e \"process.env.NODE_ENV='development'; const { spawnSync } = require('child_process'); const run = (s) => { const r = spawnSync('node', [s], { stdio: 'inherit', env: process.env }); if (r.status !== 0) process.exit(r.status || 1); }; run('src/test-server.js'); run('src/test-transactions.js'); run('src/test-portfolios-edits.js');\"",
+    "test": "node -e \"process.env.NODE_ENV='development'; const { spawnSync } = require('child_process'); const run = (s) => { const r = spawnSync('node', [s], { stdio: 'inherit', env: process.env }); if (r.status !== 0) process.exit(r.status || 1); }; run('src/test-server.js'); run('src/test-transactions.js'); run('src/test-portfolios-edits.js'); run('src/test-analysis.js');\"",
     "lint": "echo \"Linting api...\""
   },
   "dependencies": {

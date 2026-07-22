@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
 const { DynamoDBDocumentClient, PutCommand, QueryCommand, DeleteCommand, TransactWriteCommand } = require("@aws-sdk/lib-dynamodb");
 
@@ -289,6 +290,88 @@ function clearMockDb() {
   mockDb.length = 0;
 }
 
+/**
+ * Creates a new asynchronous AI analysis job.
+ * 
+ * @param {string} userId - Cognito User ID (sub)
+ * @param {string} portfolioId - Portfolio ID
+ * @returns {Promise<object>} The created job item.
+ */
+async function createAnalysisJob(userId, portfolioId) {
+  const jobId = crypto.randomUUID();
+  const pk = `USER#${userId}`;
+  const sk = `PORTFOLIO#${portfolioId}#ANALYSIS_JOB#${jobId}`;
+  const item = {
+    PK: pk,
+    SK: sk,
+    jobId,
+    type: "ai_analysis",
+    status: "PENDING",
+    portfolioId,
+    result: null,
+    error: null,
+    createdAt: new Date().toISOString()
+  };
+
+  if (isMock) {
+    mockDb.push(item);
+    return item;
+  }
+
+  if (!ddbDocClient) {
+    throw new Error("DynamoDB client is not initialized");
+  }
+
+  await ddbDocClient.send(new PutCommand({
+    TableName: tableName,
+    Item: item,
+    ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)"
+  }));
+  return item;
+}
+
+/**
+ * Retrieves an analysis job by its jobId for a user.
+ * 
+ * @param {string} userId - Cognito User ID (sub)
+ * @param {string} jobId - Job ID (UUID)
+ * @returns {Promise<object|null>} The job item, or null if not found.
+ */
+async function getAnalysisJob(userId, jobId) {
+  const pk = `USER#${userId}`;
+
+  if (isMock) {
+    return mockDb.find(i => i.PK === pk && i.jobId === jobId) || null;
+  }
+
+  if (!ddbDocClient) {
+    throw new Error("DynamoDB client is not initialized");
+  }
+
+  let lastEvaluatedKey;
+  do {
+    const response = await ddbDocClient.send(new QueryCommand({
+      TableName: tableName,
+      KeyConditionExpression: "PK = :pk",
+      FilterExpression: "jobId = :jobId",
+      ExpressionAttributeValues: {
+        ":pk": pk,
+        ":jobId": jobId
+      },
+      ExclusiveStartKey: lastEvaluatedKey,
+      // Limit applies before FilterExpression; keep it small to reduce read cost per page.
+      Limit: 25
+    }));
+
+    const found = response.Items?.[0];
+    if (found) return found;
+
+    lastEvaluatedKey = response.LastEvaluatedKey;
+  } while (lastEvaluatedKey);
+
+  return null;
+}
+
 module.exports = {
   putTransaction,
   getTransactions,
@@ -297,5 +380,7 @@ module.exports = {
   deleteTransaction,
   updateTransaction,
   clearMockDb,
+  createAnalysisJob,
+  getAnalysisJob,
   isMock
 };
