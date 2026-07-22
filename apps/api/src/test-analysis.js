@@ -68,6 +68,43 @@ const server = app.listen(PORT, async () => {
     }
     console.log("  PASS: Non-existent job returned 404 correctly");
 
+    // 4. Verify background worker asynchronous flow (delay)
+    console.log("Test 4: Verify async background worker updates status to COMPLETED after delay...");
+    const { status: s4, data: d4 } = await apiRequest("/api/portfolios/portfolio-abc/analysis", "POST");
+    if (s4 !== 202) {
+      throw new Error(`Expected 202 Accepted, got status ${s4}`);
+    }
+    const asyncJobId = d4.jobId;
+    console.log(`  Created async job with jobId: ${asyncJobId}. Waiting 2.5 seconds...`);
+
+    // Verify it is initially PENDING
+    const { data: checkPending } = await apiRequest(`/api/analysis/jobs/${asyncJobId}`);
+    if (checkPending.job.status !== "PENDING") {
+      throw new Error(`Expected job to be PENDING initially, got: ${checkPending.job.status}`);
+    }
+
+    // Wait for the background worker to finish (delay is 2000ms). Poll up to 6s to avoid flaky fixed sleeps.
+    const start = Date.now();
+    let s4Get = 0;
+    let d4Get = null;
+
+    while (Date.now() - start < 6000) {
+      ({ status: s4Get, data: d4Get } = await apiRequest(`/api/analysis/jobs/${asyncJobId}`));
+      if (s4Get === 200 && d4Get?.status === "success" && d4Get?.job?.status === "COMPLETED") break;
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
+
+    if (s4Get !== 200 || d4Get?.status !== "success") {
+      throw new Error(`Expected 200 OK, got status ${s4Get} and data: ${JSON.stringify(d4Get)}`);
+    }
+    if (d4Get.job.status !== "COMPLETED") {
+      throw new Error(`Expected job status to be COMPLETED within 6 seconds, got: ${d4Get.job.status}`);
+    }
+    if (!d4Get.job.result || d4Get.job.result.riskLevel !== "Moderate" || d4Get.job.result.diversificationScore !== 85) {
+      throw new Error(`Expected valid result object, got: ${JSON.stringify(d4Get.job.result)}`);
+    }
+    console.log("  PASS: Asynchronous background worker transitioned job to COMPLETED with correct results");
+
     console.log("\n--- All Analysis API tests passed! ---");
   } catch (err) {
     console.error("\nFAIL: Analysis API integration tests failed with error:", err);

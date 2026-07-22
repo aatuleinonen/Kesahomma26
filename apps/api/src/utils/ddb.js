@@ -1,6 +1,6 @@
 const crypto = require("crypto");
 const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
-const { DynamoDBDocumentClient, PutCommand, QueryCommand, DeleteCommand, TransactWriteCommand } = require("@aws-sdk/lib-dynamodb");
+const { DynamoDBDocumentClient, PutCommand, QueryCommand, DeleteCommand, TransactWriteCommand, UpdateCommand } = require("@aws-sdk/lib-dynamodb");
 
 const tableName = process.env.DYNAMODB_TABLE_NAME || "kesahomma26-data";
 
@@ -304,6 +304,8 @@ async function createAnalysisJob(userId, portfolioId) {
   const item = {
     PK: pk,
     SK: sk,
+    GSI1PK: `USER#${userId}#ANALYSIS_JOB#${jobId}`,
+    GSI1SK: `PORTFOLIO#${portfolioId}`,
     jobId,
     type: "ai_analysis",
     status: "PENDING",
@@ -327,6 +329,7 @@ async function createAnalysisJob(userId, portfolioId) {
     Item: item,
     ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)"
   }));
+
   return item;
 }
 
@@ -338,38 +341,80 @@ async function createAnalysisJob(userId, portfolioId) {
  * @returns {Promise<object|null>} The job item, or null if not found.
  */
 async function getAnalysisJob(userId, jobId) {
-  const pk = `USER#${userId}`;
+  const gsi1pk = `USER#${userId}#ANALYSIS_JOB#${jobId}`;
 
   if (isMock) {
-    return mockDb.find(i => i.PK === pk && i.jobId === jobId) || null;
+    return mockDb.find(i => i.GSI1PK === gsi1pk) || null;
   }
 
   if (!ddbDocClient) {
     throw new Error("DynamoDB client is not initialized");
   }
 
-  let lastEvaluatedKey;
-  do {
-    const response = await ddbDocClient.send(new QueryCommand({
-      TableName: tableName,
-      KeyConditionExpression: "PK = :pk",
-      FilterExpression: "jobId = :jobId",
-      ExpressionAttributeValues: {
-        ":pk": pk,
-        ":jobId": jobId
-      },
-      ExclusiveStartKey: lastEvaluatedKey,
-      // Limit applies before FilterExpression; keep it small to reduce read cost per page.
-      Limit: 25
-    }));
+  const response = await ddbDocClient.send(new QueryCommand({
+    TableName: tableName,
+    IndexName: "GSI1",
+    KeyConditionExpression: "GSI1PK = :gsi1pk",
+    ExpressionAttributeValues: {
+      ":gsi1pk": gsi1pk
+    }
+  }));
 
-    const found = response.Items?.[0];
-    if (found) return found;
+  return response.Items?.[0] || null;
+}
 
-    lastEvaluatedKey = response.LastEvaluatedKey;
-  } while (lastEvaluatedKey);
+/**
+ * Updates status, result, and error of an existing AI analysis job.
+ * 
+ * @param {string} userId - Cognito User ID (sub)
+ * @param {string} portfolioId - Portfolio ID
+ * @param {string} jobId - Job ID (UUID)
+ * @param {string} status - New job status ("PENDING" | "PROCESSING" | "COMPLETED" | "FAILED")
+ * @param {object|string|null} result - Results payload
+ * @param {string|null} error - Error message
+ * @returns {Promise<object>} The updated job item.
+ */
+async function updateAnalysisJob(userId, portfolioId, jobId, status, result = null, error = null) {
+  const pk = `USER#${userId}`;
+  const sk = `PORTFOLIO#${portfolioId}#ANALYSIS_JOB#${jobId}`;
 
-  return null;
+  if (isMock) {
+    const item = mockDb.find(i => i.PK === pk && i.SK === sk);
+    if (!item) {
+      throw new Error("Analysis job not found");
+    }
+    item.status = status;
+    item.result = result;
+    item.error = error;
+    item.updatedAt = new Date().toISOString();
+    return item;
+  }
+
+  if (!ddbDocClient) {
+    throw new Error("DynamoDB client is not initialized");
+  }
+
+  const response = await ddbDocClient.send(new UpdateCommand({
+    TableName: tableName,
+    Key: { PK: pk, SK: sk },
+    UpdateExpression: "SET #status = :status, #result = :result, #error = :error, #updatedAt = :updatedAt",
+    ExpressionAttributeNames: {
+      "#status": "status",
+      "#result": "result",
+      "#error": "error",
+      "#updatedAt": "updatedAt"
+    },
+    ExpressionAttributeValues: {
+      ":status": status,
+      ":result": result,
+      ":error": error,
+      ":updatedAt": new Date().toISOString()
+    },
+    ConditionExpression: "attribute_exists(PK)",
+    ReturnValues: "ALL_NEW"
+  }));
+
+  return response.Attributes;
 }
 
 module.exports = {
@@ -382,5 +427,6 @@ module.exports = {
   clearMockDb,
   createAnalysisJob,
   getAnalysisJob,
+  updateAnalysisJob,
   isMock
 };
