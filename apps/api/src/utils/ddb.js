@@ -329,6 +329,8 @@ async function createAnalysisJob(userId, portfolioId) {
     Item: item,
     ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)"
   }));
+
+  return item;
 }
 
 /**
