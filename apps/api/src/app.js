@@ -2,7 +2,7 @@ require("dotenv").config();
 const express = require("express");
 const { authMiddleware } = require("./middleware/auth");
 const { getUserId, buildIsolatedQueryParams } = require("./utils/db");
-const { putTransaction, getTransactions, getPortfolios, putPortfolio, deleteTransaction, updateTransaction, createAnalysisJob, getAnalysisJob } = require("./utils/ddb");
+const { putTransaction, getTransactions, getPortfolios, putPortfolio, deleteTransaction, updateTransaction, createAnalysisJob, getAnalysisJob, updateAnalysisJob } = require("./utils/ddb");
 const { validateNewTransaction, calculatePortfolioState, validateTransactionsState } = require("./utils/transactions");
 const { processAnalysisJob } = require("@kesahomma26/agents");
 
@@ -362,7 +362,7 @@ app.post("/api/portfolios/:portfolioId/analysis", authMiddleware, async (req, re
     const job = await createAnalysisJob(userId, portfolioId);
 
     // Call the background worker (fire-and-forget)
-    processAnalysisJob(userId, portfolioId, job.jobId).catch(console.error);
+    processAnalysisJob(userId, portfolioId, job.jobId, (status, result, err) => updateAnalysisJob(userId, portfolioId, job.jobId, status, result, err)).catch(console.error);
 
     res.status(202).json({
       jobId: job.jobId,

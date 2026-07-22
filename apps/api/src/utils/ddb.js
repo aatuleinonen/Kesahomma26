@@ -1,6 +1,6 @@
 const crypto = require("crypto");
 const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
-const { DynamoDBDocumentClient, PutCommand, QueryCommand, DeleteCommand, TransactWriteCommand, GetCommand, UpdateCommand } = require("@aws-sdk/lib-dynamodb");
+const { DynamoDBDocumentClient, PutCommand, QueryCommand, DeleteCommand, TransactWriteCommand, UpdateCommand } = require("@aws-sdk/lib-dynamodb");
 
 const tableName = process.env.DYNAMODB_TABLE_NAME || "kesahomma26-data";
 
@@ -391,7 +391,7 @@ async function updateAnalysisJob(userId, portfolioId, jobId, status, result = nu
     throw new Error("DynamoDB client is not initialized");
   }
 
-  await ddbDocClient.send(new UpdateCommand({
+  const response = await ddbDocClient.send(new UpdateCommand({
     TableName: tableName,
     Key: { PK: pk, SK: sk },
     UpdateExpression: "SET #status = :status, #result = :result, #error = :error, #updatedAt = :updatedAt",
@@ -406,15 +406,12 @@ async function updateAnalysisJob(userId, portfolioId, jobId, status, result = nu
       ":result": result,
       ":error": error,
       ":updatedAt": new Date().toISOString()
-    }
+    },
+    ConditionExpression: "attribute_exists(PK)",
+    ReturnValues: "ALL_NEW"
   }));
 
-  // Fetch and return the updated item
-  const response = await ddbDocClient.send(new GetCommand({
-    TableName: tableName,
-    Key: { PK: pk, SK: sk }
-  }));
-  return response.Item;
+  return response.Attributes;
 }
 
 module.exports = {

@@ -1,13 +1,12 @@
-const { updateAnalysisJob } = require("../../api/src/utils/ddb");
-
 /**
  * Simulates processing of an AI analysis job in the background.
  * 
  * @param {string} userId - Cognito User ID (sub)
  * @param {string} portfolioId - Portfolio ID
  * @param {string} jobId - Job ID (UUID)
+ * @param {function} updateJobStatus - Injected callback function to persist job status changes
  */
-async function processAnalysisJob(userId, portfolioId, jobId) {
+async function processAnalysisJob(userId, portfolioId, jobId, updateJobStatus) {
   console.log(`[Worker] Picked up job ${jobId} for user ${userId} and portfolio ${portfolioId}`);
   try {
     // Simulate network/LLM delay
@@ -19,12 +18,13 @@ async function processAnalysisJob(userId, portfolioId, jobId) {
       summary: "Well balanced portfolio."
     };
 
-    await updateAnalysisJob(userId, portfolioId, jobId, "COMPLETED", mockResult);
+    await updateJobStatus("COMPLETED", mockResult, null);
     console.log(`[Worker] Successfully completed job ${jobId}`);
   } catch (error) {
     console.error(`[Worker] Error processing job ${jobId}:`, error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
     try {
-      await updateAnalysisJob(userId, portfolioId, jobId, "FAILED", null, error.message);
+      await updateJobStatus("FAILED", null, errorMessage);
     } catch (dbError) {
       console.error(`[Worker] Failed to update job status to FAILED:`, dbError);
     }
