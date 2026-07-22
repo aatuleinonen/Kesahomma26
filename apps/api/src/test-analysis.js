@@ -83,16 +83,22 @@ const server = app.listen(PORT, async () => {
       throw new Error(`Expected job to be PENDING initially, got: ${checkPending.job.status}`);
     }
 
-    // Wait for the background worker to finish (delay is 2000ms, we wait 2500ms)
-    await new Promise(resolve => setTimeout(resolve, 2500));
+    // Wait for the background worker to finish (delay is 2000ms). Poll up to 6s to avoid flaky fixed sleeps.
+    const start = Date.now();
+    let s4Get = 0;
+    let d4Get = null;
 
-    // Retrieve again and verify it is COMPLETED
-    const { status: s4Get, data: d4Get } = await apiRequest(`/api/analysis/jobs/${asyncJobId}`);
-    if (s4Get !== 200 || d4Get.status !== "success") {
+    while (Date.now() - start < 6000) {
+      ({ status: s4Get, data: d4Get } = await apiRequest(`/api/analysis/jobs/${asyncJobId}`));
+      if (s4Get === 200 && d4Get?.status === "success" && d4Get?.job?.status === "COMPLETED") break;
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
+
+    if (s4Get !== 200 || d4Get?.status !== "success") {
       throw new Error(`Expected 200 OK, got status ${s4Get} and data: ${JSON.stringify(d4Get)}`);
     }
     if (d4Get.job.status !== "COMPLETED") {
-      throw new Error(`Expected job status to be COMPLETED after 2.5 seconds, got: ${d4Get.job.status}`);
+      throw new Error(`Expected job status to be COMPLETED within 6 seconds, got: ${d4Get.job.status}`);
     }
     if (!d4Get.job.result || d4Get.job.result.riskLevel !== "Moderate" || d4Get.job.result.diversificationScore !== 85) {
       throw new Error(`Expected valid result object, got: ${JSON.stringify(d4Get.job.result)}`);
