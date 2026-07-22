@@ -368,6 +368,13 @@ app.post("/api/portfolios/:portfolioId/analysis", authMiddleware, async (req, re
       status: "PENDING"
     });
   } catch (err) {
+    if (err?.name === "ConditionalCheckFailedException") {
+      return res.status(409).json({
+        status: "error",
+        message: err.message || "Analysis job already exists"
+      });
+    }
+
     const statusCode =
       typeof err?.message === "string" && err.message.startsWith("Unauthorized") ? 401 : 500;
 
