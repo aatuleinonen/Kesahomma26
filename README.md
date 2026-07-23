@@ -5,6 +5,16 @@ This repository is configured as a monorepo containing our application packages 
 ## Project Management
 - **GitHub Project Board**: [Project Board](https://github.com/users/aatuleinonen/projects/1)
 
+## Invited-user POC
+
+The first deployable release is an invitation-only portfolio tracker. It
+supports authenticated portfolio and transaction management, calculated
+holdings, and portfolio deletion. AI analysis and public signup are disabled.
+
+See [Portfolio POC operations](docs/poc-operations.md) for architecture,
+deployment, tester invitations, the data notice, smoke tests, restore, and
+rollback.
+
 ---
 
 ## Directory Layout
@@ -40,7 +50,9 @@ This repository is configured as a monorepo containing our application packages 
 > [!WARNING]
 > **Strict Secret & State Rules:**
 > - **Do not commit state files (`.tfstate`)** to the repository. They contain the details of your deployed infrastructure and potentially sensitive data.
-> - **Do not commit secret variable files (`*.tfvars` or `*.tfvars.json`)**.
+> - **Do not commit secret variable files.** The tracked `dev.tfvars` contains
+>   only the non-secret environment name required by the infrastructure
+>   pipeline.
 > - **Do not commit local provider credentials/tokens**. Use IAM roles, AWS profiles, or secure environment variables.
 
 ---
@@ -49,7 +61,7 @@ This repository is configured as a monorepo containing our application packages 
 
 ### 1. Prerequisites
 Ensure you have the following installed locally:
-- **Node.js** (>= 18) and **npm**
+- **Node.js** (>= 20) and **npm**
 - **Terraform** (>= 1.5.0)
 - **AWS CLI** (configured with appropriate credentials)
 - **TFLint** (optional, for Terraform linting)
@@ -211,4 +223,3 @@ If you have deployed the Cognito infrastructure and want to test validation usin
    # Test database data isolation parameter generation:
    curl -H "Authorization: Bearer <your-id-token>" http://localhost:3000/api/user-data
    ```
-

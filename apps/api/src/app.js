@@ -1,14 +1,38 @@
 require("dotenv").config();
 const express = require("express");
 const { authMiddleware } = require("./middleware/auth");
+const { auditMiddleware, logEvent } = require("./utils/logger");
 const { getUserId, buildIsolatedQueryParams } = require("./utils/db");
-const { putTransaction, getTransactions, getPortfolios, putPortfolio, deleteTransaction, updateTransaction, createAnalysisJob, getAnalysisJob, updateAnalysisJob } = require("./utils/ddb");
+const { putTransaction, getTransactions, getPortfolios, putPortfolio, deletePortfolio, deleteTransaction, updateTransaction, createAnalysisJob, getAnalysisJob, updateAnalysisJob } = require("./utils/ddb");
 const { validateNewTransaction, calculatePortfolioState, validateTransactionsState } = require("./utils/transactions");
-const { processAnalysisJob } = require("@kesahomma26/agents");
 
 
 const app = express();
-app.use(express.json());
+app.use(auditMiddleware);
+app.use(express.json({ limit: "100kb" }));
+
+const analysisEnabled = process.env.ENABLE_AI_ANALYSIS === "true";
+
+function requireAnalysisEnabled(req, res, next) {
+  if (!analysisEnabled) {
+    return res.status(503).json({
+      status: "error",
+      code: "FEATURE_DISABLED",
+      message: "AI analysis is not available in this release."
+    });
+  }
+  next();
+}
+
+function requireDevelopment(req, res, next) {
+  if (process.env.NODE_ENV !== "development") {
+    return res.status(404).json({
+      status: "error",
+      message: "Not found"
+    });
+  }
+  next();
+}
 
 // Public Route (Accessible to all)
 app.get("/api/public", (req, res) => {
@@ -19,7 +43,7 @@ app.get("/api/public", (req, res) => {
 });
 
 // Private Route (Requires Cognito Authorization token)
-app.get("/api/private", authMiddleware, (req, res) => {
+app.get("/api/private", authMiddleware, requireDevelopment, (req, res) => {
   res.json({
     status: "success",
     message: "Authorized! You have accessed a secure private endpoint.",
@@ -33,7 +57,7 @@ app.get("/api/private", authMiddleware, (req, res) => {
 });
 
 // Private Route demonstrating user-level data isolation parameters
-app.get("/api/user-data", authMiddleware, (req, res) => {
+app.get("/api/user-data", authMiddleware, requireDevelopment, (req, res) => {
   try {
     const userId = getUserId(req);
     const isolatedParams = buildIsolatedQueryParams(req, "UserTasksTable", {
@@ -230,6 +254,32 @@ app.post("/api/portfolios", authMiddleware, async (req, res) => {
   }
 });
 
+// Delete a portfolio and all records owned by that portfolio for the requesting user.
+app.delete("/api/portfolios/:portfolioId", authMiddleware, async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const { portfolioId } = req.params;
+    const result = await deletePortfolio(userId, portfolioId);
+
+    if (!result) {
+      return res.status(404).json({
+        status: "error",
+        message: "Portfolio not found"
+      });
+    }
+
+    return res.status(204).send();
+  } catch (err) {
+    const statusCode =
+      typeof err?.message === "string" && err.message.startsWith("Unauthorized") ? 401 : 500;
+
+    return res.status(statusCode).json({
+      status: "error",
+      message: statusCode === 500 ? "Internal Server Error" : err.message
+    });
+  }
+});
+
 // Update a transaction
 app.put("/api/portfolios/:portfolioId/transactions/:timestamp", authMiddleware, async (req, res) => {
   try {
@@ -353,7 +403,7 @@ app.delete("/api/portfolios/:portfolioId/transactions/:timestamp", authMiddlewar
 });
 
 // Start an asynchronous AI analysis job for a specific portfolio
-app.post("/api/portfolios/:portfolioId/analysis", authMiddleware, async (req, res) => {
+app.post("/api/portfolios/:portfolioId/analysis", authMiddleware, requireAnalysisEnabled, async (req, res) => {
   try {
     const userId = getUserId(req);
     const { portfolioId } = req.params;
@@ -362,6 +412,7 @@ app.post("/api/portfolios/:portfolioId/analysis", authMiddleware, async (req, re
     const job = await createAnalysisJob(userId, portfolioId);
 
     // Call the background worker (fire-and-forget)
+    const { processAnalysisJob } = require("@kesahomma26/agents");
     processAnalysisJob(userId, portfolioId, job.jobId, (status, result, err) => updateAnalysisJob(userId, portfolioId, job.jobId, status, result, err)).catch(console.error);
 
     res.status(202).json({
@@ -387,7 +438,7 @@ app.post("/api/portfolios/:portfolioId/analysis", authMiddleware, async (req, re
 });
 
 // Get status and results of a specific analysis job
-app.get("/api/analysis/jobs/:jobId", authMiddleware, async (req, res) => {
+app.get("/api/analysis/jobs/:jobId", authMiddleware, requireAnalysisEnabled, async (req, res) => {
   try {
     const userId = getUserId(req);
     const { jobId } = req.params;
@@ -420,6 +471,27 @@ app.get("/api/analysis/jobs/:jobId", authMiddleware, async (req, res) => {
       message: statusCode === 500 ? "Internal Server Error" : err.message
     });
   }
+});
+
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+
+  const isInvalidJson = err?.type === "entity.parse.failed";
+  const isTooLarge = err?.type === "entity.too.large";
+  logEvent(isInvalidJson || isTooLarge ? "warn" : "error", "api_request_failed", {
+    requestId: req.requestId,
+    errorName: err?.name || "UnknownError",
+    statusCode: isInvalidJson ? 400 : isTooLarge ? 413 : 500
+  });
+
+  return res.status(isInvalidJson ? 400 : isTooLarge ? 413 : 500).json({
+    status: "error",
+    message: isInvalidJson
+      ? "Request body must be valid JSON."
+      : isTooLarge
+        ? "Request body is too large."
+        : "Internal Server Error"
+  });
 });
 
 const PORT = process.env.PORT || 3000;

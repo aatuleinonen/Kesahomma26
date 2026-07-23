@@ -53,4 +53,12 @@ resource "aws_dynamodb_table" "kesahomma26_data" {
     name = "SK"
     type = "S"
   }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }

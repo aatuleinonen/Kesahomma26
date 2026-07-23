@@ -17,6 +17,10 @@ resource "aws_cognito_user_pool" "user_pool" {
     default_email_option = "CONFIRM_WITH_CODE"
   }
 
+  admin_create_user_config {
+    allow_admin_create_user_only = true
+  }
+
   schema {
     attribute_data_type      = "String"
     developer_only_attribute = false

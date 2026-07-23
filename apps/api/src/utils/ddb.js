@@ -1,6 +1,6 @@
 const crypto = require("crypto");
 const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
-const { DynamoDBDocumentClient, PutCommand, QueryCommand, DeleteCommand, TransactWriteCommand, UpdateCommand } = require("@aws-sdk/lib-dynamodb");
+const { DynamoDBDocumentClient, PutCommand, QueryCommand, DeleteCommand, TransactWriteCommand, UpdateCommand, BatchWriteCommand } = require("@aws-sdk/lib-dynamodb");
 
 const tableName = process.env.DYNAMODB_TABLE_NAME || "kesahomma26-data";
 
@@ -171,6 +171,91 @@ async function putPortfolio(userId, portfolio) {
     ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)"
   }));
   return item;
+}
+
+/**
+ * Deletes a portfolio metadata item and every record scoped to that portfolio.
+ *
+ * @param {string} userId - Cognito User ID (sub)
+ * @param {string} portfolioId - Portfolio ID
+ * @returns {Promise<object|null>} Deletion summary, or null when the portfolio does not exist
+ */
+async function deletePortfolio(userId, portfolioId) {
+  const pk = `USER#${userId}`;
+  const metadataSk = `METADATA#PORTFOLIO#${portfolioId}`;
+  const recordPrefix = `PORTFOLIO#${portfolioId}#`;
+  const belongsToPortfolio = item =>
+    item.PK === pk && (item.SK === metadataSk || item.SK.startsWith(recordPrefix));
+
+  if (isMock) {
+    const exists = mockDb.some(item => item.PK === pk && item.SK === metadataSk);
+    if (!exists) return null;
+
+    const records = mockDb.filter(belongsToPortfolio);
+    for (let index = mockDb.length - 1; index >= 0; index -= 1) {
+      if (belongsToPortfolio(mockDb[index])) {
+        mockDb.splice(index, 1);
+      }
+    }
+    return { deletedCount: records.length };
+  }
+
+  if (!ddbDocClient) {
+    throw new Error("DynamoDB client is not initialized");
+  }
+
+  const metadataResponse = await ddbDocClient.send(new QueryCommand({
+    TableName: tableName,
+    KeyConditionExpression: "PK = :pk AND SK = :metadataSk",
+    ExpressionAttributeValues: {
+      ":pk": pk,
+      ":metadataSk": metadataSk
+    },
+    ProjectionExpression: "PK, SK"
+  }));
+  const metadata = metadataResponse.Items?.[0];
+  if (!metadata) {
+    return null;
+  }
+
+  const records = [metadata];
+  let exclusiveStartKey;
+  do {
+    const response = await ddbDocClient.send(new QueryCommand({
+      TableName: tableName,
+      KeyConditionExpression: "PK = :pk AND begins_with(SK, :recordPrefix)",
+      ExpressionAttributeValues: {
+        ":pk": pk,
+        ":recordPrefix": recordPrefix
+      },
+      ProjectionExpression: "PK, SK",
+      ExclusiveStartKey: exclusiveStartKey
+    }));
+    records.push(...(response.Items || []));
+    exclusiveStartKey = response.LastEvaluatedKey;
+  } while (exclusiveStartKey);
+
+  for (let offset = 0; offset < records.length; offset += 25) {
+    let pending = records.slice(offset, offset + 25).map(item => ({
+      DeleteRequest: { Key: { PK: item.PK, SK: item.SK } }
+    }));
+
+    for (let attempt = 1; pending.length > 0 && attempt <= 5; attempt += 1) {
+      const response = await ddbDocClient.send(new BatchWriteCommand({
+        RequestItems: { [tableName]: pending }
+      }));
+      pending = response.UnprocessedItems?.[tableName] || [];
+      if (pending.length > 0) {
+        await new Promise(resolve => setTimeout(resolve, attempt * 50));
+      }
+    }
+
+    if (pending.length > 0) {
+      throw new Error("DynamoDB did not process all portfolio deletion requests");
+    }
+  }
+
+  return { deletedCount: records.length };
 }
 
 /**
@@ -422,6 +507,7 @@ module.exports = {
   getTransactions,
   getPortfolios,
   putPortfolio,
+  deletePortfolio,
   deleteTransaction,
   updateTransaction,
   clearMockDb,
