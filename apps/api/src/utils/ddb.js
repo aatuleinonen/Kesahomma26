@@ -204,23 +204,36 @@ async function deletePortfolio(userId, portfolioId) {
     throw new Error("DynamoDB client is not initialized");
   }
 
-  const records = [];
+  const metadataResponse = await ddbDocClient.send(new QueryCommand({
+    TableName: tableName,
+    KeyConditionExpression: "PK = :pk AND SK = :metadataSk",
+    ExpressionAttributeValues: {
+      ":pk": pk,
+      ":metadataSk": metadataSk
+    },
+    ProjectionExpression: "PK, SK"
+  }));
+  const metadata = metadataResponse.Items?.[0];
+  if (!metadata) {
+    return null;
+  }
+
+  const records = [metadata];
   let exclusiveStartKey;
   do {
     const response = await ddbDocClient.send(new QueryCommand({
       TableName: tableName,
-      KeyConditionExpression: "PK = :pk",
-      ExpressionAttributeValues: { ":pk": pk },
+      KeyConditionExpression: "PK = :pk AND begins_with(SK, :recordPrefix)",
+      ExpressionAttributeValues: {
+        ":pk": pk,
+        ":recordPrefix": recordPrefix
+      },
       ProjectionExpression: "PK, SK",
       ExclusiveStartKey: exclusiveStartKey
     }));
-    records.push(...(response.Items || []).filter(belongsToPortfolio));
+    records.push(...(response.Items || []));
     exclusiveStartKey = response.LastEvaluatedKey;
   } while (exclusiveStartKey);
-
-  if (!records.some(item => item.SK === metadataSk)) {
-    return null;
-  }
 
   for (let offset = 0; offset < records.length; offset += 25) {
     let pending = records.slice(offset, offset + 25).map(item => ({
