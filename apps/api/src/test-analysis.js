@@ -2,6 +2,7 @@ process.env.PORT = "3003";
 process.env.NODE_ENV = "development";
 process.env.BYPASS_AUTH = "true";
 process.env.MOCK_DYNAMODB = "true";
+process.env.ENABLE_AI_ANALYSIS = "true";
 
 const app = require("./app");
 const { clearMockDb } = require("./utils/ddb");

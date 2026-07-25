@@ -1,4 +1,5 @@
 const { CognitoJwtVerifier } = require("aws-jwt-verify");
+const { logEvent } = require("../utils/logger");
 
 // Configure the verifier if env variables are present.
 // For local development, we allow the verifier to be undefined if bypassing auth.
@@ -19,6 +20,10 @@ const authMiddleware = async (req, res, next) => {
   const authHeader = req.headers.authorization;
 
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    logEvent("warn", "authentication_failed", {
+      requestId: req.requestId,
+      reason: "missing_authorization_header"
+    });
     return res.status(401).json({
       error: "Unauthorized",
       message: "Missing or malformed Authorization header. Expected: Bearer <token>"
@@ -39,7 +44,9 @@ const authMiddleware = async (req, res, next) => {
   }
 
   if (!verifier) {
-    console.error("Cognito JWT verifier not configured. Missing COGNITO_USER_POOL_ID or COGNITO_CLIENT_ID.");
+    logEvent("error", "authentication_configuration_error", {
+      requestId: req.requestId
+    });
     return res.status(500).json({
       error: "Internal Server Error",
       message: "Authentication service configuration is incomplete."
@@ -59,7 +66,11 @@ const authMiddleware = async (req, res, next) => {
     
     next();
   } catch (err) {
-    console.warn("JWT validation failed:", err);
+    logEvent("warn", "authentication_failed", {
+      requestId: req.requestId,
+      reason: "token_validation_failed",
+      errorName: err?.name || "UnknownError"
+    });
     return res.status(401).json({
       error: "Unauthorized",
       message: "Token validation failed"

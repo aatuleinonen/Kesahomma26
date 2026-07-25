@@ -470,6 +470,22 @@ body {
   border-color: rgba(255, 255, 255, 0.2);
 }
 
+.btn-danger {
+  background: transparent;
+  color: #ff8a8a;
+  border: 1px solid var(--danger-color);
+  padding: 0.6rem 1.25rem;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 600;
+  transition: all 0.2s ease;
+}
+
+.btn-danger:hover {
+  background: var(--danger-color);
+  color: #fff;
+}
+
 /* Empty State Card */
 .empty-state-card {
   background: var(--card-bg);
@@ -918,4 +934,3 @@ body {
   padding: 2rem;
   font-style: italic;
 }
-

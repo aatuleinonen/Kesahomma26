@@ -4,6 +4,7 @@
 # .tfvars files (contains secrets/variables)
 *.tfvars
 *.tfvars.json
+!infrastructure/terraform/dev.tfvars
 
 # Local state files
 *.tfstate
@@ -40,6 +41,6 @@ terraform.rc
 .DS_Store
 Thumbs.db
 node_modules/
+.artifacts/
 .env
 .env.*
-

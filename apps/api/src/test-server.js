@@ -73,6 +73,51 @@ const server = app.listen(PORT, async () => {
       passed = false;
     }
 
+    // 6. Test that AI analysis is disabled unless explicitly enabled
+    const resAnalysisDisabled = await fetch(`http://localhost:${PORT}/api/portfolios/demo/analysis`, {
+      method: "POST",
+      headers: {
+        "Authorization": "Bearer dummy-token",
+        "Connection": "close"
+      }
+    });
+    const jsonAnalysisDisabled = await resAnalysisDisabled.json();
+    if (resAnalysisDisabled.status !== 503 || jsonAnalysisDisabled.code !== "FEATURE_DISABLED") {
+      console.error("FAIL: AI analysis was not disabled by default");
+      passed = false;
+    }
+
+    // 7. Test safe handling of invalid and oversized JSON bodies
+    const resInvalidJson = await fetch(`http://localhost:${PORT}/api/portfolios`, {
+      method: "POST",
+      headers: {
+        "Authorization": "Bearer dummy-token",
+        "Content-Type": "application/json",
+        "Connection": "close"
+      },
+      body: "{invalid"
+    });
+    const jsonInvalidJson = await resInvalidJson.json();
+    if (resInvalidJson.status !== 400 || jsonInvalidJson.message !== "Request body must be valid JSON.") {
+      console.error("FAIL: Invalid JSON did not return a safe 400 response");
+      passed = false;
+    }
+
+    const resLargeBody = await fetch(`http://localhost:${PORT}/api/portfolios`, {
+      method: "POST",
+      headers: {
+        "Authorization": "Bearer dummy-token",
+        "Content-Type": "application/json",
+        "Connection": "close"
+      },
+      body: JSON.stringify({ value: "x".repeat(101 * 1024) })
+    });
+    const jsonLargeBody = await resLargeBody.json();
+    if (resLargeBody.status !== 413 || jsonLargeBody.message !== "Request body is too large.") {
+      console.error("FAIL: Oversized JSON did not return a safe 413 response");
+      passed = false;
+    }
+
   } catch (err) {
     console.error("Test execution encountered an error:", err);
     passed = false;

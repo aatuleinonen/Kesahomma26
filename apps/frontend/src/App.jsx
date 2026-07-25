@@ -3,7 +3,7 @@ import PortfolioDashboard from './components/PortfolioDashboard';
 
 function App() {
   return (
-    <Authenticator>
+    <Authenticator hideSignUp>
       {({ signOut, user }) => (
         <PortfolioDashboard signOut={signOut} user={user} />
       )}

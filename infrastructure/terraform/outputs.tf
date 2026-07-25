@@ -42,3 +42,33 @@ output "cognito_user_pool_endpoint" {
   value       = aws_cognito_user_pool.user_pool.endpoint
   description = "The endpoint of the Cognito User Pool."
 }
+
+output "aws_region" {
+  value       = var.aws_region
+  description = "The AWS region hosting the POC application."
+}
+
+output "poc_url" {
+  value       = "https://${aws_cloudfront_distribution.poc.domain_name}"
+  description = "The HTTPS URL for invited POC testers."
+}
+
+output "api_lambda_function_name" {
+  value       = aws_lambda_function.api.function_name
+  description = "The Lambda function updated by the POC deployment script."
+}
+
+output "frontend_bucket_name" {
+  value       = aws_s3_bucket.frontend.id
+  description = "The private S3 bucket containing built frontend assets."
+}
+
+output "cloudfront_distribution_id" {
+  value       = aws_cloudfront_distribution.poc.id
+  description = "The CloudFront distribution invalidated after frontend deployments."
+}
+
+output "api_gateway_endpoint" {
+  value       = aws_apigatewayv2_api.poc.api_endpoint
+  description = "The direct API Gateway endpoint used as the CloudFront API origin."
+}

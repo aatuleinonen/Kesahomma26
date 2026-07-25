@@ -4,7 +4,7 @@ process.env.BYPASS_AUTH = "true";
 process.env.MOCK_DYNAMODB = "true";
 
 const app = require("./app");
-const { clearMockDb } = require("./utils/ddb");
+const { clearMockDb, deletePortfolio, getPortfolios, putPortfolio } = require("./utils/ddb");
 
 const PORT = Number(process.env.PORT || 3002);
 const server = app.listen(PORT, async () => {
@@ -25,7 +25,7 @@ const server = app.listen(PORT, async () => {
         options.body = JSON.stringify(body);
       }
       const res = await fetch(`http://localhost:${PORT}${path}`, options);
-      const data = await res.json();
+      const data = res.status === 204 ? null : await res.json();
       return { status: res.status, data };
     };
 
@@ -156,6 +156,37 @@ const server = app.listen(PORT, async () => {
       throw new Error(`Expected €5,000 cash and no MSFT, got: ${JSON.stringify(d12)}`);
     }
     console.log("  PASS: Holdings state correct after deletion");
+
+    // 13. Delete the portfolio and all of its remaining records
+    console.log("Test 13: Delete portfolio and all related records...");
+    const { status: s13 } = await apiRequest("/api/portfolios/my-tech-portfolio", "DELETE");
+    if (s13 !== 204) {
+      throw new Error(`Expected 204 portfolio deletion, got status ${s13}`);
+    }
+    const { data: d13Portfolios } = await apiRequest("/api/portfolios");
+    const { data: d13Transactions } = await apiRequest("/api/portfolios/my-tech-portfolio/transactions");
+    if (d13Portfolios.portfolios.length !== 0 || d13Transactions.transactions.length !== 0) {
+      throw new Error("Expected portfolio metadata and transactions to be deleted");
+    }
+    console.log("  PASS: Portfolio and related records deleted");
+
+    // 14. Return not found when deleting an absent portfolio
+    console.log("Test 14: Reject deletion of an absent portfolio...");
+    const { status: s14, data: d14 } = await apiRequest("/api/portfolios/my-tech-portfolio", "DELETE");
+    if (s14 !== 404 || d14.message !== "Portfolio not found") {
+      throw new Error(`Expected 404 for absent portfolio, got status ${s14}: ${JSON.stringify(d14)}`);
+    }
+    console.log("  PASS: Missing portfolio returned 404");
+
+    // 15. Verify the storage operation cannot delete another user's matching portfolio ID
+    console.log("Test 15: Preserve another user's matching portfolio ID...");
+    await putPortfolio("other-user", { portfolioId: "shared-id", name: "Other User Portfolio" });
+    const deletion = await deletePortfolio("dev-user-12345-uuid-67890", "shared-id");
+    const otherUserPortfolios = await getPortfolios("other-user");
+    if (deletion !== null || otherUserPortfolios.length !== 1) {
+      throw new Error("Expected tenant-scoped deletion to preserve the other user's portfolio");
+    }
+    console.log("  PASS: Tenant isolation preserved");
 
     console.log("\n--- All Portfolios & Edits tests passed successfully! ---");
   } catch (err) {
