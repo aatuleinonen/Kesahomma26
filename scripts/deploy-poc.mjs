@@ -186,7 +186,7 @@ async function main() {
     'apps/api/src/lambda.js',
     '--bundle',
     '--platform=node',
-    '--target=node20',
+    '--target=node24',
     `--outfile=${apiBundle}`,
   ])
   await createArchive(apiBundle, apiArchive)
