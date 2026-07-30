@@ -43,6 +43,10 @@ rollback.
 └── package.json              # Monorepo workspace configuration
 ```
 
+The root `scripts/` directory contains local POC deployment helpers:
+`deploy-poc.ps1` resolves Terraform outputs and starts deployment on Windows,
+while `deploy-poc.mjs` builds and uploads the API and frontend artifacts.
+
 ---
 
 ## Hygiene and Security Rules
@@ -94,6 +98,20 @@ You can run build, test, and lint commands across all packages simultaneously us
     ```bash
     npm run lint
     ```
+#### **C. Deploying the Invited-user POC**
+
+After the POC infrastructure has been provisioned, use the Windows deployment
+helper to rebuild and upload the API and frontend artifacts:
+```powershell
+.\scripts\deploy-poc.ps1
+```
+
+The helper reads the required AWS resource identifiers from Terraform outputs,
+then deploys the application artifacts and invalidates CloudFront. It requires
+Node.js, Terraform, and an explicit AWS credential environment. See
+[Portfolio POC operations](docs/poc-operations.md) for the complete
+provisioning, deployment, rollback, and tester-management runbook.
+
 
 ---
 
