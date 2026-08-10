@@ -60,8 +60,10 @@ resource "aws_iam_role_policy" "api_lambda" {
         Sid    = "AccessPortfolioTable"
         Effect = "Allow"
         Action = [
+          "dynamodb:BatchGetItem",
           "dynamodb:BatchWriteItem",
           "dynamodb:DeleteItem",
+          "dynamodb:GetItem",
           "dynamodb:PutItem",
           "dynamodb:Query",
           "dynamodb:UpdateItem"
