@@ -17,7 +17,7 @@ signup are disabled.
 
 ## Provision and deploy
 
-From a clean checkout, install Node.js 20, Terraform, AWS CLI, and TFLint. Sign
+From a clean checkout, install Node.js 24, Terraform, AWS CLI, and TFLint. Sign
 in to the intended AWS account by setting `AWS_PROFILE` or explicit AWS
 credential environment variables. The bootstrap intentionally refuses to use
 an unselected default profile. Then run:

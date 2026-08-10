@@ -65,7 +65,7 @@ while `deploy-poc.mjs` builds and uploads the API and frontend artifacts.
 
 ### 1. Prerequisites
 Ensure you have the following installed locally:
-- **Node.js** (>= 20) and **npm**
+- **Node.js** (>= 24) and **npm**
 - **Terraform** (>= 1.5.0)
 - **AWS CLI** (configured with appropriate credentials)
 - **TFLint** (optional, for Terraform linting)

@@ -96,7 +96,7 @@ resource "aws_lambda_function" "api" {
   description                    = "Portfolio POC API"
   role                           = aws_iam_role.api_lambda.arn
   handler                        = "index.handler"
-  runtime                        = "nodejs20.x"
+  runtime                        = "nodejs24.x"
   architectures                  = ["arm64"]
   memory_size                    = 256
   timeout                        = 15
