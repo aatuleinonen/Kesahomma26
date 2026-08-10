@@ -15,7 +15,6 @@
     "@aws-sdk/client-lambda": "^3.1093.0",
     "@aws-sdk/client-s3": "^3.1093.0",
     "archiver": "^8.0.0",
-    "esbuild": "^0.28.0",
-    "node": "^24.18.1"
+    "esbuild": "^0.28.0"
   }
 }
