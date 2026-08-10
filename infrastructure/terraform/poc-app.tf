@@ -11,6 +11,7 @@ locals {
     [
       "${path.root}/../../package-lock.json",
       "${path.root}/../../package.json",
+      "${path.root}/../../scripts/deploy-poc-ci.mjs",
       "${path.root}/../../scripts/deploy-poc.mjs"
     ]
   ))
@@ -374,7 +375,7 @@ resource "terraform_data" "application_deployment" {
   provisioner "local-exec" {
     working_dir = "${path.root}/../.."
     command = join(" ", [
-      "npm ci && npx --no-install node scripts/deploy-poc.mjs",
+      "npx --yes node@24.18.1 scripts/deploy-poc-ci.mjs",
       "--region ${var.aws_region}",
       "--lambda-function ${aws_lambda_function.api.function_name}",
       "--frontend-bucket ${aws_s3_bucket.frontend.id}",
