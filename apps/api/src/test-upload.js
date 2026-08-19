@@ -145,7 +145,40 @@ const server = app.listen(PORT, async () => {
     }
     console.log(`  PASS: Background worker updated status to READY_FOR_REVIEW with ${d5Get.job.extractedData.length} holdings`);
 
+    // 6. Confirm Document Import Test
+    console.log("\nTest 6: Confirm document import job and prevent double-imports...");
+    const resConfirm1 = await fetch(`http://localhost:${PORT}/api/portfolios/${portfolioId}/upload/${asyncImportId}/confirm`, {
+      method: "POST",
+      headers: {
+        "Authorization": "Bearer dummy-token"
+      }
+    });
+    const dConfirm1 = await resConfirm1.json();
+    if (resConfirm1.status !== 200 || dConfirm1.status !== "success") {
+      throw new Error(`Expected 200 OK for confirm, got status ${resConfirm1.status} and data: ${JSON.stringify(dConfirm1)}`);
+    }
+    console.log("  PASS: Confirm endpoint returned 200 OK");
+
+    const { status: s6Get, data: d6Get } = await getRequest(`/api/portfolios/${portfolioId}/upload/${asyncImportId}`);
+    if (s6Get !== 200 || d6Get?.job?.status !== "COMPLETED") {
+      throw new Error(`Expected status to be COMPLETED after confirm, got status ${s6Get} and data: ${JSON.stringify(d6Get)}`);
+    }
+    console.log("  PASS: Job status verified as COMPLETED");
+
+    const resConfirm2 = await fetch(`http://localhost:${PORT}/api/portfolios/${portfolioId}/upload/${asyncImportId}/confirm`, {
+      method: "POST",
+      headers: {
+        "Authorization": "Bearer dummy-token"
+      }
+    });
+    const dConfirm2 = await resConfirm2.json();
+    if (resConfirm2.status !== 400 || dConfirm2.status !== "error") {
+      throw new Error(`Expected 400 Bad Request on second confirm call, got status ${resConfirm2.status} and data: ${JSON.stringify(dConfirm2)}`);
+    }
+    console.log("  PASS: Double-import attempt rejected with 400 Bad Request");
+
     console.log("\n--- All Document Upload API integration tests passed! ---");
+
 
   } catch (err) {
     console.error("\nFAIL: Integration tests failed with error:", err);

@@ -628,6 +628,69 @@ async function updateDocImportJob(userId, portfolioId, importId, status, extract
   return response.Attributes;
 }
 
+/**
+ * Creates an asset record in a portfolio.
+ * 
+ * @param {string} userId - Cognito User ID (sub)
+ * @param {string} portfolioId - Portfolio ID
+ * @param {object} asset - Asset object ({ ticker, quantity, costBasis, assetId, etc. })
+ * @returns {Promise<object>} The saved asset item.
+ */
+async function createAsset(userId, portfolioId, asset) {
+  const assetId = asset.assetId || asset.ticker || crypto.randomUUID();
+  const pk = `USER#${userId}`;
+  const sk = `PORTFOLIO#${portfolioId}#ASSET#${assetId}`;
+  const item = {
+    PK: pk,
+    SK: sk,
+    portfolioId,
+    assetId,
+    ticker: asset.ticker,
+    quantity: parseFloat(asset.quantity) || 0,
+    costBasis: parseFloat(asset.costBasis) || 0,
+    type: "asset",
+    createdAt: new Date().toISOString()
+  };
+
+  if (isMock) {
+    const existingIdx = mockDb.findIndex(i => i.PK === pk && i.SK === sk);
+    if (existingIdx !== -1) {
+      mockDb[existingIdx] = item;
+    } else {
+      mockDb.push(item);
+    }
+    return item;
+  }
+
+  if (!ddbDocClient) {
+    throw new Error("DynamoDB client is not initialized");
+  }
+
+  await ddbDocClient.send(new PutCommand({
+    TableName: tableName,
+    Item: item
+  }));
+  return item;
+}
+
+/**
+ * Batch writes multiple asset records into a portfolio.
+ * 
+ * @param {string} userId - Cognito User ID (sub)
+ * @param {string} portfolioId - Portfolio ID
+ * @param {Array<object>} assets - Array of asset objects
+ * @returns {Promise<Array<object>>} The list of saved asset items.
+ */
+async function batchWriteAssets(userId, portfolioId, assets) {
+  if (!Array.isArray(assets)) return [];
+  const savedAssets = [];
+  for (const asset of assets) {
+    const saved = await createAsset(userId, portfolioId, asset);
+    savedAssets.push(saved);
+  }
+  return savedAssets;
+}
+
 module.exports = {
   putTransaction,
   getTransactions,
@@ -643,7 +706,10 @@ module.exports = {
   createDocImportJob,
   getDocImportJob,
   updateDocImportJob,
+  createAsset,
+  batchWriteAssets,
   isMock
 };
+
 
 

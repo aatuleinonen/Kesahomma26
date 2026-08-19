@@ -5,7 +5,7 @@ const multer = require("multer");
 const { authMiddleware } = require("./middleware/auth");
 const { auditMiddleware, logEvent } = require("./utils/logger");
 const { getUserId, buildIsolatedQueryParams } = require("./utils/db");
-const { putTransaction, getTransactions, getPortfolios, putPortfolio, deletePortfolio, deleteTransaction, updateTransaction, createAnalysisJob, getAnalysisJob, updateAnalysisJob, createDocImportJob, getDocImportJob, updateDocImportJob } = require("./utils/ddb");
+const { putTransaction, getTransactions, getPortfolios, putPortfolio, deletePortfolio, deleteTransaction, updateTransaction, createAnalysisJob, getAnalysisJob, updateAnalysisJob, createDocImportJob, getDocImportJob, updateDocImportJob, batchWriteAssets } = require("./utils/ddb");
 const { validateNewTransaction, calculatePortfolioState, validateTransactionsState } = require("./utils/transactions");
 const { processDocumentImport } = require("@kesahomma26/agents");
 
@@ -612,6 +612,54 @@ app.get("/api/portfolios/upload/:importId", authMiddleware, async (req, res) => 
     });
   }
 });
+
+// Confirm document import and persist extracted assets into portfolio
+app.post("/api/portfolios/:portfolioId/upload/:importId/confirm", authMiddleware, async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const { portfolioId, importId } = req.params;
+
+    const job = await getDocImportJob(userId, importId);
+    if (!job) {
+      return res.status(404).json({
+        status: "error",
+        message: "Document import job not found"
+      });
+    }
+
+    if (job.status !== "READY_FOR_REVIEW") {
+      return res.status(400).json({
+        status: "error",
+        message: `Cannot confirm document import with status '${job.status}'. Expected status 'READY_FOR_REVIEW'.`
+      });
+    }
+
+    const assets = Array.isArray(job.extractedData) ? job.extractedData : [];
+    const savedAssets = await batchWriteAssets(userId, portfolioId, assets);
+
+    const updatedJob = await updateDocImportJob(userId, portfolioId, importId, "COMPLETED", job.extractedData, null);
+
+    res.json({
+      status: "success",
+      message: "Document import confirmed and assets created successfully",
+      importedCount: savedAssets.length,
+      job: {
+        importId: updatedJob.importId,
+        portfolioId: updatedJob.portfolioId,
+        status: updatedJob.status
+      }
+    });
+  } catch (err) {
+    const statusCode =
+      typeof err?.message === "string" && err.message.startsWith("Unauthorized") ? 401 : 500;
+
+    res.status(statusCode).json({
+      status: "error",
+      message: statusCode === 500 ? "Internal Server Error" : err.message
+    });
+  }
+});
+
 
 
 app.use((err, req, res, next) => {
