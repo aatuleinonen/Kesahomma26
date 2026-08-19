@@ -1,15 +1,34 @@
 require("dotenv").config();
+const path = require("path");
 const express = require("express");
+const multer = require("multer");
 const { authMiddleware } = require("./middleware/auth");
 const { auditMiddleware, logEvent } = require("./utils/logger");
 const { getUserId, buildIsolatedQueryParams } = require("./utils/db");
-const { putTransaction, getTransactions, getPortfolios, putPortfolio, deletePortfolio, deleteTransaction, updateTransaction, createAnalysisJob, getAnalysisJob, updateAnalysisJob } = require("./utils/ddb");
+const { putTransaction, getTransactions, getPortfolios, putPortfolio, deletePortfolio, deleteTransaction, updateTransaction, createAnalysisJob, getAnalysisJob, updateAnalysisJob, createDocImportJob, getDocImportJob, updateDocImportJob } = require("./utils/ddb");
 const { validateNewTransaction, calculatePortfolioState, validateTransactionsState } = require("./utils/transactions");
+const { processDocumentImport } = require("@kesahomma26/agents");
 
 
 const app = express();
 app.use(auditMiddleware);
 app.use(express.json({ limit: "100kb" }));
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  fileFilter: (req, file, cb) => {
+    const allowedExtensions = [".pdf", ".xlsx", ".xls", ".csv"];
+    const ext = path.extname(file.originalname || "").toLowerCase();
+    if (allowedExtensions.includes(ext)) {
+      cb(null, true);
+    } else {
+      const err = new Error("Invalid file extension. Only .pdf, .xlsx, .xls, and .csv are supported.");
+      err.code = "INVALID_FILE_EXTENSION";
+      cb(err);
+    }
+  }
+});
+
 
 const analysisEnabled = process.env.ENABLE_AI_ANALYSIS === "true";
 
@@ -472,6 +491,128 @@ app.get("/api/analysis/jobs/:jobId", authMiddleware, requireAnalysisEnabled, asy
     });
   }
 });
+
+// Upload document for a portfolio
+app.post("/api/portfolios/:portfolioId/upload", authMiddleware, (req, res, next) => {
+  upload.single("file")(req, res, (err) => {
+    if (err) {
+      if (err.code === "INVALID_FILE_EXTENSION" || err instanceof multer.MulterError) {
+        return res.status(400).json({
+          status: "error",
+          message: err.message || "Invalid file type. Only .pdf, .xlsx, .xls, and .csv are supported."
+        });
+      }
+      return res.status(400).json({
+        status: "error",
+        message: err.message || "Bad Request"
+      });
+    }
+    if (!req.file) {
+      return res.status(400).json({
+        status: "error",
+        message: "No file uploaded"
+      });
+    }
+    next();
+  });
+}, async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const { portfolioId } = req.params;
+
+    const job = await createDocImportJob(userId, portfolioId);
+
+    // Call the background document parser worker (fire-and-forget)
+    processDocumentImport(userId, portfolioId, job.importId, (status, data, err) => updateDocImportJob(userId, portfolioId, job.importId, status, data, err)).catch(console.error);
+
+    res.status(201).json({
+      importId: job.importId,
+      status: "UPLOADED"
+    });
+
+  } catch (err) {
+    const statusCode =
+      typeof err?.message === "string" && err.message.startsWith("Unauthorized") ? 401 : 500;
+
+    res.status(statusCode).json({
+      status: "error",
+      message: statusCode === 500 ? "Internal Server Error" : err.message
+    });
+  }
+});
+
+// Get document import job status by portfolioId and importId
+app.get("/api/portfolios/:portfolioId/upload/:importId", authMiddleware, async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const { importId } = req.params;
+
+    const job = await getDocImportJob(userId, importId);
+    if (!job) {
+      return res.status(404).json({
+        status: "error",
+        message: "Document import job not found"
+      });
+    }
+
+    res.json({
+      status: "success",
+      job: {
+        importId: job.importId,
+        portfolioId: job.portfolioId,
+        status: job.status,
+        type: job.type,
+        extractedData: job.extractedData,
+        createdAt: job.createdAt
+      }
+    });
+  } catch (err) {
+    const statusCode =
+      typeof err?.message === "string" && err.message.startsWith("Unauthorized") ? 401 : 500;
+
+    res.status(statusCode).json({
+      status: "error",
+      message: statusCode === 500 ? "Internal Server Error" : err.message
+    });
+  }
+});
+
+// Get document import job status directly by importId
+app.get("/api/portfolios/upload/:importId", authMiddleware, async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const { importId } = req.params;
+
+    const job = await getDocImportJob(userId, importId);
+    if (!job) {
+      return res.status(404).json({
+        status: "error",
+        message: "Document import job not found"
+      });
+    }
+
+    res.json({
+      status: "success",
+      job: {
+        importId: job.importId,
+        portfolioId: job.portfolioId,
+        status: job.status,
+        type: job.type,
+        extractedData: job.extractedData,
+        createdAt: job.createdAt
+      }
+    });
+  } catch (err) {
+    const statusCode =
+      typeof err?.message === "string" && err.message.startsWith("Unauthorized") ? 401 : 500;
+
+    res.status(statusCode).json({
+      status: "error",
+      message: statusCode === 500 ? "Internal Server Error" : err.message
+    });
+  }
+});
+
 
 app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);
