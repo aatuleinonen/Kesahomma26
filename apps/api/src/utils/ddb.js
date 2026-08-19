@@ -502,6 +502,195 @@ async function updateAnalysisJob(userId, portfolioId, jobId, status, result = nu
   return response.Attributes;
 }
 
+/**
+ * Creates a new document import job for a portfolio.
+ * 
+ * @param {string} userId - Cognito User ID (sub)
+ * @param {string} portfolioId - Portfolio ID
+ * @returns {Promise<object>} The created doc import job item.
+ */
+async function createDocImportJob(userId, portfolioId) {
+  const importId = crypto.randomUUID();
+  const pk = `USER#${userId}`;
+  const sk = `PORTFOLIO#${portfolioId}#DOC_IMPORT#${importId}`;
+  const item = {
+    PK: pk,
+    SK: sk,
+    GSI1PK: `USER#${userId}#DOC_IMPORT#${importId}`,
+    GSI1SK: `PORTFOLIO#${portfolioId}`,
+    importId,
+    portfolioId,
+    type: "document_import",
+    status: "UPLOADED",
+    extractedData: null,
+    createdAt: new Date().toISOString()
+  };
+
+  if (isMock) {
+    mockDb.push(item);
+    return item;
+  }
+
+  if (!ddbDocClient) {
+    throw new Error("DynamoDB client is not initialized");
+  }
+
+  await ddbDocClient.send(new PutCommand({
+    TableName: tableName,
+    Item: item,
+    ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)"
+  }));
+
+  return item;
+}
+
+/**
+ * Retrieves a document import job by its importId for a user.
+ * 
+ * @param {string} userId - Cognito User ID (sub)
+ * @param {string} importId - Import Job ID (UUID)
+ * @returns {Promise<object|null>} The document import job item, or null if not found.
+ */
+async function getDocImportJob(userId, importId) {
+  const gsi1pk = `USER#${userId}#DOC_IMPORT#${importId}`;
+
+  if (isMock) {
+    return mockDb.find(i => i.GSI1PK === gsi1pk || (i.PK === `USER#${userId}` && i.SK && i.SK.endsWith(`#DOC_IMPORT#${importId}`))) || null;
+  }
+
+  if (!ddbDocClient) {
+    throw new Error("DynamoDB client is not initialized");
+  }
+
+  const response = await ddbDocClient.send(new QueryCommand({
+    TableName: tableName,
+    IndexName: "GSI1",
+    KeyConditionExpression: "GSI1PK = :gsi1pk",
+    ExpressionAttributeValues: {
+      ":gsi1pk": gsi1pk
+    }
+  }));
+
+  return response.Items?.[0] || null;
+}
+
+/**
+ * Updates status, extractedData, and error of an existing document import job.
+ * 
+ * @param {string} userId - Cognito User ID (sub)
+ * @param {string} portfolioId - Portfolio ID
+ * @param {string} importId - Import Job ID (UUID)
+ * @param {string} status - New job status ("UPLOADED" | "PROCESSING" | "READY_FOR_REVIEW" | "COMPLETED" | "FAILED")
+ * @param {Array|object|null} extractedData - Extracted holdings payload
+ * @param {string|null} error - Error message
+ * @returns {Promise<object>} The updated job item attributes.
+ */
+async function updateDocImportJob(userId, portfolioId, importId, status, extractedData = null, error = null) {
+  const pk = `USER#${userId}`;
+  const sk = `PORTFOLIO#${portfolioId}#DOC_IMPORT#${importId}`;
+
+  if (isMock) {
+    const item = mockDb.find(i => i.PK === pk && i.SK === sk);
+    if (!item) {
+      throw new Error("Document import job not found");
+    }
+    item.status = status;
+    item.extractedData = extractedData;
+    item.error = error;
+    item.updatedAt = new Date().toISOString();
+    return item;
+  }
+
+  if (!ddbDocClient) {
+    throw new Error("DynamoDB client is not initialized");
+  }
+
+  const response = await ddbDocClient.send(new UpdateCommand({
+    TableName: tableName,
+    Key: { PK: pk, SK: sk },
+    UpdateExpression: "SET #status = :status, #extractedData = :extractedData, #error = :error, #updatedAt = :updatedAt",
+    ExpressionAttributeNames: {
+      "#status": "status",
+      "#extractedData": "extractedData",
+      "#error": "error",
+      "#updatedAt": "updatedAt"
+    },
+    ExpressionAttributeValues: {
+      ":status": status,
+      ":extractedData": extractedData,
+      ":error": error,
+      ":updatedAt": new Date().toISOString()
+    },
+    ConditionExpression: "attribute_exists(PK)",
+    ReturnValues: "ALL_NEW"
+  }));
+
+  return response.Attributes;
+}
+
+/**
+ * Creates an asset record in a portfolio.
+ * 
+ * @param {string} userId - Cognito User ID (sub)
+ * @param {string} portfolioId - Portfolio ID
+ * @param {object} asset - Asset object ({ ticker, quantity, costBasis, assetId, etc. })
+ * @returns {Promise<object>} The saved asset item.
+ */
+async function createAsset(userId, portfolioId, asset) {
+  const assetId = asset.assetId || asset.ticker || crypto.randomUUID();
+  const pk = `USER#${userId}`;
+  const sk = `PORTFOLIO#${portfolioId}#ASSET#${assetId}`;
+  const item = {
+    PK: pk,
+    SK: sk,
+    portfolioId,
+    assetId,
+    ticker: asset.ticker,
+    quantity: parseFloat(asset.quantity) || 0,
+    costBasis: parseFloat(asset.costBasis) || 0,
+    type: "asset",
+    createdAt: new Date().toISOString()
+  };
+
+  if (isMock) {
+    const existingIdx = mockDb.findIndex(i => i.PK === pk && i.SK === sk);
+    if (existingIdx !== -1) {
+      mockDb[existingIdx] = item;
+    } else {
+      mockDb.push(item);
+    }
+    return item;
+  }
+
+  if (!ddbDocClient) {
+    throw new Error("DynamoDB client is not initialized");
+  }
+
+  await ddbDocClient.send(new PutCommand({
+    TableName: tableName,
+    Item: item
+  }));
+  return item;
+}
+
+/**
+ * Batch writes multiple asset records into a portfolio.
+ * 
+ * @param {string} userId - Cognito User ID (sub)
+ * @param {string} portfolioId - Portfolio ID
+ * @param {Array<object>} assets - Array of asset objects
+ * @returns {Promise<Array<object>>} The list of saved asset items.
+ */
+async function batchWriteAssets(userId, portfolioId, assets) {
+  if (!Array.isArray(assets)) return [];
+  const savedAssets = [];
+  for (const asset of assets) {
+    const saved = await createAsset(userId, portfolioId, asset);
+    savedAssets.push(saved);
+  }
+  return savedAssets;
+}
+
 module.exports = {
   putTransaction,
   getTransactions,
@@ -514,5 +703,13 @@ module.exports = {
   createAnalysisJob,
   getAnalysisJob,
   updateAnalysisJob,
+  createDocImportJob,
+  getDocImportJob,
+  updateDocImportJob,
+  createAsset,
+  batchWriteAssets,
   isMock
 };
+
+
+
