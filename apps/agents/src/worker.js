@@ -31,6 +31,10 @@ async function processAnalysisJob(userId, portfolioId, jobId, updateJobStatus) {
   }
 }
 
+const { processDocumentImport } = require("./docParser");
+
 module.exports = {
-  processAnalysisJob
+  processAnalysisJob,
+  processDocumentImport
 };
+

@@ -574,6 +574,60 @@ async function getDocImportJob(userId, importId) {
   return response.Items?.[0] || null;
 }
 
+/**
+ * Updates status, extractedData, and error of an existing document import job.
+ * 
+ * @param {string} userId - Cognito User ID (sub)
+ * @param {string} portfolioId - Portfolio ID
+ * @param {string} importId - Import Job ID (UUID)
+ * @param {string} status - New job status ("UPLOADED" | "PROCESSING" | "READY_FOR_REVIEW" | "COMPLETED" | "FAILED")
+ * @param {Array|object|null} extractedData - Extracted holdings payload
+ * @param {string|null} error - Error message
+ * @returns {Promise<object>} The updated job item attributes.
+ */
+async function updateDocImportJob(userId, portfolioId, importId, status, extractedData = null, error = null) {
+  const pk = `USER#${userId}`;
+  const sk = `PORTFOLIO#${portfolioId}#DOC_IMPORT#${importId}`;
+
+  if (isMock) {
+    const item = mockDb.find(i => i.PK === pk && i.SK === sk);
+    if (!item) {
+      throw new Error("Document import job not found");
+    }
+    item.status = status;
+    item.extractedData = extractedData;
+    item.error = error;
+    item.updatedAt = new Date().toISOString();
+    return item;
+  }
+
+  if (!ddbDocClient) {
+    throw new Error("DynamoDB client is not initialized");
+  }
+
+  const response = await ddbDocClient.send(new UpdateCommand({
+    TableName: tableName,
+    Key: { PK: pk, SK: sk },
+    UpdateExpression: "SET #status = :status, #extractedData = :extractedData, #error = :error, #updatedAt = :updatedAt",
+    ExpressionAttributeNames: {
+      "#status": "status",
+      "#extractedData": "extractedData",
+      "#error": "error",
+      "#updatedAt": "updatedAt"
+    },
+    ExpressionAttributeValues: {
+      ":status": status,
+      ":extractedData": extractedData,
+      ":error": error,
+      ":updatedAt": new Date().toISOString()
+    },
+    ConditionExpression: "attribute_exists(PK)",
+    ReturnValues: "ALL_NEW"
+  }));
+
+  return response.Attributes;
+}
+
 module.exports = {
   putTransaction,
   getTransactions,
@@ -588,6 +642,8 @@ module.exports = {
   updateAnalysisJob,
   createDocImportJob,
   getDocImportJob,
+  updateDocImportJob,
   isMock
 };
+
 

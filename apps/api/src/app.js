@@ -5,8 +5,10 @@ const multer = require("multer");
 const { authMiddleware } = require("./middleware/auth");
 const { auditMiddleware, logEvent } = require("./utils/logger");
 const { getUserId, buildIsolatedQueryParams } = require("./utils/db");
-const { putTransaction, getTransactions, getPortfolios, putPortfolio, deletePortfolio, deleteTransaction, updateTransaction, createAnalysisJob, getAnalysisJob, updateAnalysisJob, createDocImportJob, getDocImportJob } = require("./utils/ddb");
+const { putTransaction, getTransactions, getPortfolios, putPortfolio, deletePortfolio, deleteTransaction, updateTransaction, createAnalysisJob, getAnalysisJob, updateAnalysisJob, createDocImportJob, getDocImportJob, updateDocImportJob } = require("./utils/ddb");
 const { validateNewTransaction, calculatePortfolioState, validateTransactionsState } = require("./utils/transactions");
+const { processDocumentImport } = require("@kesahomma26/agents");
+
 
 const app = express();
 app.use(auditMiddleware);
@@ -520,10 +522,14 @@ app.post("/api/portfolios/:portfolioId/upload", authMiddleware, (req, res, next)
 
     const job = await createDocImportJob(userId, portfolioId);
 
+    // Call the background document parser worker (fire-and-forget)
+    processDocumentImport(userId, portfolioId, job.importId, (status, data, err) => updateDocImportJob(userId, portfolioId, job.importId, status, data, err)).catch(console.error);
+
     res.status(201).json({
       importId: job.importId,
       status: "UPLOADED"
     });
+
   } catch (err) {
     const statusCode =
       typeof err?.message === "string" && err.message.startsWith("Unauthorized") ? 401 : 500;

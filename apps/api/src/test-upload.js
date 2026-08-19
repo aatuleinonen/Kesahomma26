@@ -116,7 +116,37 @@ const server = app.listen(PORT, async () => {
     }
     console.log("  PASS: GET non-existent import job returned 404 as expected");
 
+    // 5. Background Parser Worker Asynchronous Processing Test
+    console.log("\nTest 5: Verify async background parser updates status to READY_FOR_REVIEW after delay...");
+    const { status: s5Post, data: d5Post } = await uploadFile("portfolio_import.pdf");
+    if (s5Post !== 201 || d5Post.status !== "UPLOADED") {
+      throw new Error(`Expected 201 UPLOADED for test 5, got status ${s5Post} and data: ${JSON.stringify(d5Post)}`);
+    }
+    const asyncImportId = d5Post.importId;
+    console.log(`  Created async import job ${asyncImportId}. Waiting for background worker...`);
+
+    const startTime = Date.now();
+    let s5Get = 0;
+    let d5Get = null;
+    while (Date.now() - startTime < 7000) {
+      ({ status: s5Get, data: d5Get } = await getRequest(`/api/portfolios/${portfolioId}/upload/${asyncImportId}`));
+      if (s5Get === 200 && d5Get?.job?.status === "READY_FOR_REVIEW") break;
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
+
+    if (s5Get !== 200 || d5Get.status !== "success") {
+      throw new Error(`Expected 200 OK for status get, got ${s5Get} and data: ${JSON.stringify(d5Get)}`);
+    }
+    if (!d5Get.job || d5Get.job.status !== "READY_FOR_REVIEW") {
+      throw new Error(`Expected job status to transition to READY_FOR_REVIEW within 7s, got: ${d5Get?.job?.status}`);
+    }
+    if (!Array.isArray(d5Get.job.extractedData) || d5Get.job.extractedData.length === 0) {
+      throw new Error(`Expected extractedData array with holdings, got: ${JSON.stringify(d5Get?.job?.extractedData)}`);
+    }
+    console.log(`  PASS: Background worker updated status to READY_FOR_REVIEW with ${d5Get.job.extractedData.length} holdings`);
+
     console.log("\n--- All Document Upload API integration tests passed! ---");
+
   } catch (err) {
     console.error("\nFAIL: Integration tests failed with error:", err);
     passed = false;
