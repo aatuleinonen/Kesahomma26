@@ -1,5 +1,3 @@
-const crypto = require("crypto");
-
 /**
  * Simulates processing of an AI document import job in the background.
  * 
@@ -16,8 +14,8 @@ async function processDocumentImport(userId, portfolioId, importId, document, up
       throw new Error("Document import is missing uploaded file bytes");
     }
 
-    const checksum = crypto.createHash("sha256").update(document.buffer).digest("hex");
-    console.log(`[DocParser] Processing ${document.metadata?.originalName || "uploaded document"} (${document.buffer.length} bytes, sha256 ${checksum})`);
+    await updateJobStatus("PROCESSING", null, null);
+    console.log(`[DocParser] Processing document import job ${importId} (${document.buffer.length} bytes)`);
 
     // Simulate network/LLM extraction delay
     await new Promise(resolve => setTimeout(resolve, 3000));
