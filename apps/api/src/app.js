@@ -552,8 +552,11 @@ app.post("/api/portfolios/:portfolioId/upload", authMiddleware, (req, res, next)
     ).catch(console.error);
 
     res.status(201).json({
-      importId: job.importId,
-      status: "UPLOADED"
+      status: "success",
+      job: {
+        importId: job.importId,
+        status: job.status
+      }
     });
 
   } catch (err) {
