@@ -7,7 +7,7 @@ const { authMiddleware } = require("./middleware/auth");
 const { auditMiddleware, logEvent } = require("./utils/logger");
 const { getUserId, buildIsolatedQueryParams } = require("./utils/db");
 const { putTransaction, getTransactions, getPortfolios, getPortfolio, getPortfolioDocumentSources, markPortfolioDeleting, putPortfolio, deletePortfolio, deleteTransaction, updateTransaction, createAnalysisJob, getAnalysisJob, updateAnalysisJob, createDocImportJob, getDocImportJob } = require("./utils/ddb");
-const { deleteDocument, storeDocument } = require("./utils/documentStorage");
+const { deleteDocument, deleteDocuments, storeDocument } = require("./utils/documentStorage");
 const { validateNewTransaction, calculatePortfolioState, validateTransactionsState } = require("./utils/transactions");
 
 const app = express();
@@ -299,10 +299,7 @@ app.delete("/api/portfolios/:portfolioId", authMiddleware, async (req, res) => {
       return res.status(404).json({ status: "error", message: "Portfolio not found" });
     }
     const sourceDocuments = await getPortfolioDocumentSources(userId, portfolioId);
-    const cleanupBatchSize = 5;
-    for (let index = 0; index < sourceDocuments.length; index += cleanupBatchSize) {
-      await Promise.all(sourceDocuments.slice(index, index + cleanupBatchSize).map(deleteDocument));
-    }
+    await deleteDocuments(sourceDocuments);
     const result = await deletePortfolio(userId, portfolioId);
 
     if (!result) {
