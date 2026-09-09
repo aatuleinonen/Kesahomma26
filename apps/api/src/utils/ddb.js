@@ -1,6 +1,6 @@
 const crypto = require("crypto");
 const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
-const { DynamoDBDocumentClient, PutCommand, QueryCommand, DeleteCommand, TransactWriteCommand, UpdateCommand, BatchWriteCommand } = require("@aws-sdk/lib-dynamodb");
+const { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, DeleteCommand, TransactWriteCommand, UpdateCommand, BatchWriteCommand } = require("@aws-sdk/lib-dynamodb");
 
 const tableName = process.env.DYNAMODB_TABLE_NAME || "kesahomma26-data";
 
@@ -130,6 +130,19 @@ async function getPortfolios(userId) {
 
   return (response.Items || [])
     .sort((a, b) => a.SK.localeCompare(b.SK));
+}
+
+async function getPortfolio(userId, portfolioId) {
+  const pk = `USER#${userId}`;
+  const sk = `METADATA#PORTFOLIO#${portfolioId}`;
+  if (isMock) return mockDb.find(item => item.PK === pk && item.SK === sk) || null;
+  if (!ddbDocClient) throw new Error("DynamoDB client is not initialized");
+  const response = await ddbDocClient.send(new GetCommand({
+    TableName: tableName,
+    Key: { PK: pk, SK: sk },
+    ConsistentRead: true
+  }));
+  return response.Item || null;
 }
 
 /**
@@ -510,8 +523,7 @@ async function updateAnalysisJob(userId, portfolioId, jobId, status, result = nu
  * @param {object} sourceDocument - Uploaded document metadata retained with the job.
  * @returns {Promise<object>} The created doc import job item.
  */
-async function createDocImportJob(userId, portfolioId, sourceDocument = null) {
-  const importId = crypto.randomUUID();
+async function createDocImportJob(userId, portfolioId, sourceDocument = null, importId = crypto.randomUUID()) {
   const pk = `USER#${userId}`;
   const sk = `PORTFOLIO#${portfolioId}#DOC_IMPORT#${importId}`;
   const item = {
@@ -553,7 +565,20 @@ async function createDocImportJob(userId, portfolioId, sourceDocument = null) {
  * @param {string} importId - Import Job ID (UUID)
  * @returns {Promise<object|null>} The document import job item, or null if not found.
  */
-async function getDocImportJob(userId, importId) {
+async function getDocImportJob(userId, importId, portfolioId) {
+  if (portfolioId) {
+    const pk = `USER#${userId}`;
+    const sk = `PORTFOLIO#${portfolioId}#DOC_IMPORT#${importId}`;
+    if (isMock) return mockDb.find(item => item.PK === pk && item.SK === sk) || null;
+    if (!ddbDocClient) throw new Error("DynamoDB client is not initialized");
+    const response = await ddbDocClient.send(new GetCommand({
+      TableName: tableName,
+      Key: { PK: pk, SK: sk },
+      ConsistentRead: true
+    }));
+    return response.Item || null;
+  }
+
   const gsi1pk = `USER#${userId}#DOC_IMPORT#${importId}`;
 
   if (isMock) {
@@ -783,6 +808,7 @@ module.exports = {
   putTransaction,
   getTransactions,
   getPortfolios,
+  getPortfolio,
   putPortfolio,
   deletePortfolio,
   deleteTransaction,
