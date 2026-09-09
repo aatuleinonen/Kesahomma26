@@ -680,10 +680,10 @@ async function updateDocImportJob(userId, portfolioId, importId, status, extract
   const pk = `USER#${userId}`;
   const sk = `PORTFOLIO#${portfolioId}#DOC_IMPORT#${importId}`;
   const expectedStatuses = {
-    PROCESSING: ["UPLOADED", "RETRYING"],
-    RETRYING: ["UPLOADED", "RETRYING"],
+    PROCESSING: ["UPLOADED", "PROCESSING", "RETRYING"],
+    RETRYING: ["UPLOADED", "PROCESSING", "RETRYING"],
     READY_FOR_REVIEW: ["PROCESSING"],
-    FAILED: ["UPLOADED", "PROCESSING"]
+    FAILED: ["UPLOADED", "PROCESSING", "RETRYING"]
   }[status];
   if (!expectedStatuses) throw new Error(`Unsupported document import status transition: ${status}`);
 

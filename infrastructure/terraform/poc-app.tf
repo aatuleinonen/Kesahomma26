@@ -1,7 +1,8 @@
 # Deploys the single-environment serverless application used by invited POC testers.
 
 locals {
-  resource_prefix = "kesahomma26-${var.environment}"
+  resource_prefix                   = "kesahomma26-${var.environment}"
+  document_import_max_receive_count = 3
   application_source_files = sort(concat(
     [
       for file in fileset("${path.root}/../../apps", "**") :
@@ -225,7 +226,7 @@ resource "aws_sqs_queue" "document_imports" {
   sqs_managed_sse_enabled    = true
   redrive_policy = jsonencode({
     deadLetterTargetArn = aws_sqs_queue.document_imports_dlq.arn
-    maxReceiveCount     = 3
+    maxReceiveCount     = local.document_import_max_receive_count
   })
 }
 
@@ -290,9 +291,10 @@ resource "aws_lambda_function" "document_worker" {
 
   environment {
     variables = {
-      DYNAMODB_TABLE_NAME    = aws_dynamodb_table.single_table.name
-      DOCUMENT_IMPORT_BUCKET = aws_s3_bucket.document_imports.id
-      NODE_ENV               = "production"
+      DYNAMODB_TABLE_NAME               = aws_dynamodb_table.single_table.name
+      DOCUMENT_IMPORT_BUCKET            = aws_s3_bucket.document_imports.id
+      DOCUMENT_IMPORT_MAX_RECEIVE_COUNT = tostring(local.document_import_max_receive_count)
+      NODE_ENV                          = "production"
     }
   }
 
