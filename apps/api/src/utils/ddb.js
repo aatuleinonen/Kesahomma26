@@ -664,9 +664,11 @@ async function confirmDocImport(userId, job) {
   const holdings = new Map();
   for (const [index, asset] of (Array.isArray(job.extractedData) ? job.extractedData : []).entries()) {
     const ticker = typeof asset?.ticker === "string" ? asset.ticker.trim().toUpperCase() : "";
+    const hasQuantity = asset?.quantity !== null && asset?.quantity !== undefined && String(asset.quantity).trim() !== "";
+    const hasCostBasis = asset?.costBasis !== null && asset?.costBasis !== undefined && String(asset.costBasis).trim() !== "";
     const quantity = Number(asset?.quantity);
     const costBasis = Number(asset?.costBasis);
-    if (!ticker || !Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(costBasis) || costBasis < 0) {
+    if (!ticker || !hasQuantity || !hasCostBasis || !Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(costBasis) || costBasis < 0) {
       const err = new Error(`Extracted holding ${index + 1} has invalid ticker, quantity, or cost basis`);
       err.code = "INVALID_IMPORT_ASSETS";
       throw err;
@@ -714,12 +716,14 @@ async function confirmDocImport(userId, job) {
     if (!jobItem || jobItem.status !== "READY_FOR_REVIEW") {
       const err = new Error("Document import is no longer ready for confirmation");
       err.name = "ConditionalCheckFailedException";
+      err.code = "IMPORT_NOT_READY";
       throw err;
     }
 
     if (transactionItems.some(item => mockDb.some(existing => existing.PK === item.PK && existing.SK === item.SK))) {
       const err = new Error("An imported transaction already exists at the generated timestamp");
       err.name = "ConditionalCheckFailedException";
+      err.code = "IMPORT_TRANSACTION_CONFLICT";
       throw err;
     }
     mockDb.push(...transactionItems);

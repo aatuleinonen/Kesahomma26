@@ -672,7 +672,12 @@ app.post("/api/portfolios/:portfolioId/upload/:importId/confirm", authMiddleware
       }
     });
   } catch (err) {
-    if (err?.name === "ConditionalCheckFailedException" || err?.name === "TransactionCanceledException") {
+    const cancellationReasons = err?.CancellationReasons || err?.cancellationReasons;
+    const jobStatusConditionFailed = err?.code === "IMPORT_NOT_READY"
+      || (err?.name === "TransactionCanceledException"
+        && Array.isArray(cancellationReasons)
+        && cancellationReasons.at(-1)?.Code === "ConditionalCheckFailed");
+    if (jobStatusConditionFailed) {
       return res.status(400).json({
         status: "error",
         message: "Document import was already confirmed or is no longer ready for confirmation"

@@ -6,6 +6,7 @@ process.env.MOCK_DYNAMODB = "true";
 const app = require("./app");
 const { clearMockDb, createDocImportJob, getDocImportJob, putPortfolio, updateDocImportJob } = require("./utils/ddb");
 const { clearMockDocuments, loadDocument } = require("./utils/documentStorage");
+const { processImportMessage } = require("./document-worker");
 
 const PORT = Number(process.env.PORT || 3004);
 const server = app.listen(PORT, async () => {
@@ -163,6 +164,24 @@ const server = app.listen(PORT, async () => {
     }
     console.log("  PASS: GET non-existent import job returned 404 as expected");
 
+    const unreadableImport = await createDocImportJob("dev-user-12345-uuid-67890", portfolioId, {
+      bucket: "mock-document-imports",
+      key: "missing-document",
+      originalName: "missing.csv",
+      mimeType: "text/csv"
+    });
+    let workerReadError;
+    try {
+      await processImportMessage({ userId: "dev-user-12345-uuid-67890", portfolioId, importId: unreadableImport.importId });
+    } catch (error) {
+      workerReadError = error;
+    }
+    const unreadableJob = await getDocImportJob("dev-user-12345-uuid-67890", unreadableImport.importId, portfolioId);
+    if (!workerReadError || unreadableJob.status !== "FAILED" || !unreadableJob.error?.includes("will be retried")) {
+      throw new Error(`Expected an unreadable source to remain retryable with FAILED status, got: ${JSON.stringify(unreadableJob)}`);
+    }
+    console.log("  PASS: Unreadable source is marked FAILED and remains retryable");
+
     // 5. Background Parser Worker Asynchronous Processing Test
     console.log("\nTest 5: Verify async background parser updates status to READY_FOR_REVIEW after delay...");
     const csvFixture = "ticker,description,quantity,costBasis\nAAPL,\"Apple, Inc.\",4,600\nAAPL,\"Apple, Inc.\",6,900\nVOO,Fund,5,2000";
@@ -258,7 +277,7 @@ const server = app.listen(PORT, async () => {
 
     const invalidImport = await createDocImportJob("dev-user-12345-uuid-67890", portfolioId);
     await updateDocImportJob("dev-user-12345-uuid-67890", portfolioId, invalidImport.importId, "READY_FOR_REVIEW", [
-      { ticker: "BROKEN", quantity: "2shares", costBasis: "NaN" }
+      { ticker: "BROKEN", quantity: 2, costBasis: null }
     ], null);
     const invalidConfirm = await fetch(`http://localhost:${PORT}/api/portfolios/${portfolioId}/upload/${invalidImport.importId}/confirm`, {
       method: "POST",
