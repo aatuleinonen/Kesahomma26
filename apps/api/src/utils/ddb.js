@@ -582,11 +582,13 @@ async function createDocImportJob(userId, portfolioId, sourceDocument = null, im
     if (!portfolio || portfolio.deletionStatus === "DELETING") {
       const err = new Error("Portfolio is unavailable for document imports");
       err.name = "TransactionCanceledException";
+      err.CancellationReasons = [{ Code: "ConditionalCheckFailed" }, { Code: "None" }];
       throw err;
     }
     if (mockDb.some(candidate => candidate.PK === pk && candidate.SK === sk)) {
       const err = new Error("Document import job already exists");
       err.name = "TransactionCanceledException";
+      err.CancellationReasons = [{ Code: "None" }, { Code: "ConditionalCheckFailed" }];
       throw err;
     }
     mockDb.push(item);
