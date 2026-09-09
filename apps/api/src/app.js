@@ -1,11 +1,13 @@
 require("dotenv").config();
+const crypto = require("crypto");
 const path = require("path");
 const express = require("express");
 const multer = require("multer");
 const { authMiddleware } = require("./middleware/auth");
 const { auditMiddleware, logEvent } = require("./utils/logger");
 const { getUserId, buildIsolatedQueryParams } = require("./utils/db");
-const { putTransaction, getTransactions, getPortfolios, putPortfolio, deletePortfolio, deleteTransaction, updateTransaction, createAnalysisJob, getAnalysisJob, updateAnalysisJob, createDocImportJob, getDocImportJob } = require("./utils/ddb");
+const { putTransaction, getTransactions, getPortfolios, getPortfolio, putPortfolio, deletePortfolio, deleteTransaction, updateTransaction, createAnalysisJob, getAnalysisJob, updateAnalysisJob, createDocImportJob, getDocImportJob } = require("./utils/ddb");
+const { deleteDocument, storeDocument } = require("./utils/documentStorage");
 const { validateNewTransaction, calculatePortfolioState, validateTransactionsState } = require("./utils/transactions");
 
 const app = express();
@@ -534,11 +536,24 @@ app.post("/api/portfolios/:portfolioId/upload", authMiddleware, (req, res, next)
     const userId = getUserId(req);
     const { portfolioId } = req.params;
 
-    const job = await createDocImportJob(userId, portfolioId, {
+    if (!await getPortfolio(userId, portfolioId)) {
+      return res.status(404).json({ status: "error", message: "Portfolio not found" });
+    }
+
+    const importId = crypto.randomUUID();
+    const sourceDocument = await storeDocument(userId, portfolioId, importId, {
       originalName: normalizeUploadFilename(req.file.originalname),
       mimeType: req.file.mimetype,
-      size: req.file.size
+      buffer: req.file.buffer
     });
+
+    let job;
+    try {
+      job = await createDocImportJob(userId, portfolioId, sourceDocument, importId);
+    } catch (err) {
+      await deleteDocument(sourceDocument).catch(() => {});
+      throw err;
+    }
 
     res.status(201).json({
       status: "success",
@@ -548,6 +563,9 @@ app.post("/api/portfolios/:portfolioId/upload", authMiddleware, (req, res, next)
       }
     });
   } catch (err) {
+    if (err?.name === "ConditionalCheckFailedException") {
+      return res.status(409).json({ status: "error", message: "Document import job already exists" });
+    }
     const statusCode =
       typeof err?.message === "string" && err.message.startsWith("Unauthorized") ? 401 : 500;
 
@@ -564,7 +582,7 @@ app.get("/api/portfolios/:portfolioId/upload/:importId", authMiddleware, async (
     const userId = getUserId(req);
     const { portfolioId, importId } = req.params;
 
-    const job = await getDocImportJob(userId, importId);
+    const job = await getDocImportJob(userId, importId, portfolioId);
     if (!job || job.portfolioId !== portfolioId) {
       return res.status(404).json({
         status: "error",
@@ -593,43 +611,6 @@ app.get("/api/portfolios/:portfolioId/upload/:importId", authMiddleware, async (
     });
   }
 });
-
-// Get document import job status directly by importId
-app.get("/api/portfolios/upload/:importId", authMiddleware, async (req, res) => {
-  try {
-    const userId = getUserId(req);
-    const { importId } = req.params;
-
-    const job = await getDocImportJob(userId, importId);
-    if (!job) {
-      return res.status(404).json({
-        status: "error",
-        message: "Document import job not found"
-      });
-    }
-
-    res.json({
-      status: "success",
-      job: {
-        importId: job.importId,
-        portfolioId: job.portfolioId,
-        status: job.status,
-        type: job.type,
-        extractedData: job.extractedData,
-        createdAt: job.createdAt
-      }
-    });
-  } catch (err) {
-    const statusCode =
-      typeof err?.message === "string" && err.message.startsWith("Unauthorized") ? 401 : 500;
-
-    res.status(statusCode).json({
-      status: "error",
-      message: statusCode === 500 ? "Internal Server Error" : err.message
-    });
-  }
-});
-
 
 app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);
