@@ -60,10 +60,18 @@ async function deleteDocument(sourceDocument) {
     mockDocuments.delete(sourceDocument.key);
     return;
   }
-  await s3Client.send(new DeleteObjectCommand({
-    Bucket: sourceDocument.bucket,
-    Key: sourceDocument.key
-  }));
+  const attempts = 3;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      await s3Client.send(new DeleteObjectCommand({
+        Bucket: sourceDocument.bucket,
+        Key: sourceDocument.key
+      }));
+      return;
+    } catch (error) {
+      if (attempt === attempts) throw error;
+    }
+  }
 }
 
 function clearMockDocuments() {
