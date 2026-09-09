@@ -70,4 +70,9 @@ function hasMockDocument(sourceDocument) {
   return mockDocuments.has(sourceDocument.key);
 }
 
-module.exports = { storeDocument, deleteDocument, clearMockDocuments, hasMockDocument };
+function getMockDocumentCount() {
+  if (!isMock) throw new Error("Mock document inspection is only available in tests");
+  return mockDocuments.size;
+}
+
+module.exports = { storeDocument, deleteDocument, clearMockDocuments, getMockDocumentCount, hasMockDocument };

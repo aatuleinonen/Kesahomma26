@@ -586,7 +586,12 @@ app.post("/api/portfolios/:portfolioId/upload", authMiddleware, (req, res, next)
       }
     });
   } catch (err) {
-    if (err?.name === "ConditionalCheckFailedException" || err?.name === "TransactionCanceledException") {
+    const cancellationReasons = err?.CancellationReasons || err?.cancellationReasons;
+    const importConditionFailed = err?.name === "ConditionalCheckFailedException"
+      || (err?.name === "TransactionCanceledException"
+        && Array.isArray(cancellationReasons)
+        && cancellationReasons.slice(0, 2).some(reason => reason?.Code === "ConditionalCheckFailed"));
+    if (importConditionFailed) {
       return res.status(409).json({ status: "error", message: "Portfolio is unavailable or the document import already exists" });
     }
     const statusCode =

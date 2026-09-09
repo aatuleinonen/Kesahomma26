@@ -5,7 +5,7 @@ process.env.MOCK_DYNAMODB = "true";
 
 const app = require("./app");
 const { clearMockDb, createDocImportJob, markPortfolioDeleting, putPortfolio } = require("./utils/ddb");
-const { clearMockDocuments } = require("./utils/documentStorage");
+const { clearMockDocuments, getMockDocumentCount } = require("./utils/documentStorage");
 
 const PORT = Number(process.env.PORT || 3004);
 const server = app.listen(PORT, async () => {
@@ -122,9 +122,13 @@ const server = app.listen(PORT, async () => {
     if (blockedCreateError?.name !== "TransactionCanceledException") {
       throw new Error("Expected the deletion marker to reject new document import jobs");
     }
+    const documentCountBeforeBlockedUpload = getMockDocumentCount();
     const blockedUpload = await uploadFile("blocked.csv", "ticker,quantity,costBasis\nAAPL,1,100", "text/csv");
     if (blockedUpload.status !== 409) {
       throw new Error(`Expected 409 while portfolio deletion is active, got ${blockedUpload.status}`);
+    }
+    if (getMockDocumentCount() !== documentCountBeforeBlockedUpload) {
+      throw new Error("Expected the rejected upload to clean up its stored document");
     }
     console.log("  PASS: Portfolio deletion marker blocks new imports");
 
