@@ -241,6 +241,39 @@ const server = app.listen(PORT, async () => {
     }
     console.log("  PASS: Backdated withdrawal rejected");
 
+    console.log("Test 21: Create a zero-cost transfer-in without changing cash...");
+    const { status: s21, data: d21 } = await apiRequest("/api/portfolios/portfolio-1/transactions", "POST", {
+      type: "transfer_in",
+      ticker: "VOO",
+      quantity: 2,
+      price: 0,
+      amount: 0,
+      timestamp: "2026-06-20T10:35:00.000Z"
+    });
+    if (s21 !== 201) {
+      throw new Error(`Expected 201 transfer-in creation, got status ${s21}: ${JSON.stringify(d21)}`);
+    }
+    const { data: transferredHoldings } = await apiRequest("/api/portfolios/portfolio-1/holdings");
+    if (transferredHoldings.cashBalance !== 600 || transferredHoldings.holdings.VOO !== 2) {
+      throw new Error(`Expected transfer-in to add shares without changing cash, got: ${JSON.stringify(transferredHoldings)}`);
+    }
+    console.log("  PASS: Transfer-in accepted and holdings updated without a cash movement");
+
+    console.log("Test 22: Edit a transfer-in transaction...");
+    const { status: s22, data: d22 } = await apiRequest(
+      `/api/portfolios/portfolio-1/transactions/${encodeURIComponent(d21.transaction.timestamp)}`,
+      "PUT",
+      { type: "transfer_in", ticker: "VOO", quantity: 3, price: 0, amount: 0, timestamp: d21.transaction.timestamp }
+    );
+    if (s22 !== 200) {
+      throw new Error(`Expected 200 transfer-in update, got status ${s22}: ${JSON.stringify(d22)}`);
+    }
+    const { data: editedTransferHoldings } = await apiRequest("/api/portfolios/portfolio-1/holdings");
+    if (editedTransferHoldings.cashBalance !== 600 || editedTransferHoldings.holdings.VOO !== 3) {
+      throw new Error(`Expected edited transfer-in holdings without a cash movement, got: ${JSON.stringify(editedTransferHoldings)}`);
+    }
+    console.log("  PASS: Transfer-in edit accepted and holdings recalculated");
+
     console.log("\n--- All Transaction tests passed! ---");
   } catch (err) {
     console.error("\nFAIL: Transaction integration tests failed with error:", err);

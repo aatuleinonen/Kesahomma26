@@ -89,15 +89,15 @@ function validateNewTransaction(newTxn, existingTxns) {
   if (isNaN(amount)) {
     amount = quantity * price;
   }
-  if (amount <= 0) {
+  if (type === "transfer_in" ? amount < 0 : amount <= 0) {
     return {
       valid: false,
-      error: "Amount must be greater than 0"
+      error: type === "transfer_in" ? "Amount must be 0 or greater" : "Amount must be greater than 0"
     };
   }
 
   // Validate generic types
-  const validTypes = ["buy", "sell", "deposit", "withdrawal", "dividend", "fee"];
+  const validTypes = ["buy", "sell", "transfer_in", "deposit", "withdrawal", "dividend", "fee"];
   if (!validTypes.includes(type)) {
     return {
       valid: false,
@@ -106,7 +106,7 @@ function validateNewTransaction(newTxn, existingTxns) {
   }
 
   // Check type-specific validations
-  if (type === "buy" || type === "sell") {
+  if (type === "buy" || type === "sell" || type === "transfer_in") {
     if (!ticker) {
       return {
         valid: false,
@@ -119,10 +119,10 @@ function validateNewTransaction(newTxn, existingTxns) {
         error: "Quantity must be greater than 0"
       };
     }
-    if (price <= 0) {
+    if (type === "transfer_in" ? price < 0 : price <= 0) {
       return {
         valid: false,
-        error: "Price must be greater than 0"
+        error: type === "transfer_in" ? "Price must be 0 or greater" : "Price must be greater than 0"
       };
     }
   } else {

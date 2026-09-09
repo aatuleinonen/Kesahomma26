@@ -177,10 +177,10 @@ const server = app.listen(PORT, async () => {
       workerReadError = error;
     }
     const unreadableJob = await getDocImportJob("dev-user-12345-uuid-67890", unreadableImport.importId, portfolioId);
-    if (!workerReadError || unreadableJob.status !== "FAILED" || !unreadableJob.error?.includes("will be retried")) {
-      throw new Error(`Expected an unreadable source to remain retryable with FAILED status, got: ${JSON.stringify(unreadableJob)}`);
+    if (!workerReadError || unreadableJob.status !== "RETRYING" || !unreadableJob.error?.includes("will be retried")) {
+      throw new Error(`Expected an unreadable source to remain in RETRYING status, got: ${JSON.stringify(unreadableJob)}`);
     }
-    console.log("  PASS: Unreadable source is marked FAILED and remains retryable");
+    console.log("  PASS: Unreadable source remains in an explicit retryable state");
 
     // 5. Background Parser Worker Asynchronous Processing Test
     console.log("\nTest 5: Verify async background parser updates status to READY_FOR_REVIEW after delay...");
@@ -265,6 +265,7 @@ const server = app.listen(PORT, async () => {
     console.log("  PASS: Double-import attempt rejected with 400 Bad Request");
 
     const emptyImport = await createDocImportJob("dev-user-12345-uuid-67890", portfolioId);
+    await updateDocImportJob("dev-user-12345-uuid-67890", portfolioId, emptyImport.importId, "PROCESSING", null, null);
     await updateDocImportJob("dev-user-12345-uuid-67890", portfolioId, emptyImport.importId, "READY_FOR_REVIEW", [], null);
     const emptyConfirm = await fetch(`http://localhost:${PORT}/api/portfolios/${portfolioId}/upload/${emptyImport.importId}/confirm`, {
       method: "POST",
@@ -276,6 +277,7 @@ const server = app.listen(PORT, async () => {
     console.log("  PASS: Empty extraction cannot be confirmed");
 
     const invalidImport = await createDocImportJob("dev-user-12345-uuid-67890", portfolioId);
+    await updateDocImportJob("dev-user-12345-uuid-67890", portfolioId, invalidImport.importId, "PROCESSING", null, null);
     await updateDocImportJob("dev-user-12345-uuid-67890", portfolioId, invalidImport.importId, "READY_FOR_REVIEW", [
       { ticker: "BROKEN", quantity: 2, costBasis: null }
     ], null);
