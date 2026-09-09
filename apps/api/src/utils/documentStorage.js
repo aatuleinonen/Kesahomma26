@@ -1,6 +1,6 @@
 // Stores uploaded import documents durably in S3, with an in-memory implementation for tests.
 const crypto = require("crypto");
-const { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } = require("@aws-sdk/client-s3");
+const { DeleteObjectCommand, DeleteObjectsCommand, GetObjectCommand, PutObjectCommand, S3Client } = require("@aws-sdk/client-s3");
 
 const isMock = process.env.MOCK_DYNAMODB === "true" || process.env.NODE_ENV === "test";
 const bucketName = process.env.DOCUMENT_IMPORT_BUCKET;
@@ -74,6 +74,37 @@ async function deleteDocument(sourceDocument) {
   }
 }
 
+async function deleteDocuments(sourceDocuments) {
+  if (isMock) {
+    for (const sourceDocument of sourceDocuments) mockDocuments.delete(sourceDocument.key);
+    return;
+  }
+
+  const documentsByBucket = new Map();
+  for (const sourceDocument of sourceDocuments) {
+    const bucketDocuments = documentsByBucket.get(sourceDocument.bucket) || [];
+    bucketDocuments.push(sourceDocument);
+    documentsByBucket.set(sourceDocument.bucket, bucketDocuments);
+  }
+
+  for (const [bucket, bucketDocuments] of documentsByBucket) {
+    for (let index = 0; index < bucketDocuments.length; index += 1000) {
+      const batch = bucketDocuments.slice(index, index + 1000);
+      const response = await s3Client.send(new DeleteObjectsCommand({
+        Bucket: bucket,
+        Delete: {
+          Objects: batch.map(document => ({ Key: document.key })),
+          Quiet: true
+        }
+      }));
+      if (response.Errors?.length) {
+        const failedKeys = response.Errors.map(error => error.Key).filter(Boolean).join(", ");
+        throw new Error(`Failed to delete document import objects: ${failedKeys || "unknown keys"}`);
+      }
+    }
+  }
+}
+
 function clearMockDocuments() {
   mockDocuments.clear();
 }
@@ -88,4 +119,4 @@ function getMockDocumentCount() {
   return mockDocuments.size;
 }
 
-module.exports = { storeDocument, loadDocument, deleteDocument, clearMockDocuments, getMockDocumentCount, hasMockDocument };
+module.exports = { storeDocument, loadDocument, deleteDocument, deleteDocuments, clearMockDocuments, getMockDocumentCount, hasMockDocument };
