@@ -13,6 +13,13 @@ app.use(auditMiddleware);
 app.use(express.json({ limit: "100kb" }));
 
 const maxUploadSizeBytes = Number.parseInt(process.env.DOCUMENT_UPLOAD_MAX_BYTES, 10) || 10 * 1024 * 1024;
+
+function normalizeUploadFilename(originalName) {
+  return String(originalName || "document")
+    .replace(/[\\/\x00-\x1F]/g, "_")
+    .slice(0, 255) || "document";
+}
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
@@ -499,16 +506,20 @@ app.get("/api/analysis/jobs/:jobId", authMiddleware, requireAnalysisEnabled, asy
 app.post("/api/portfolios/:portfolioId/upload", authMiddleware, (req, res, next) => {
   upload.single("file")(req, res, (err) => {
     if (err) {
-      if (err.code === "INVALID_FILE_EXTENSION" || err instanceof multer.MulterError) {
+      if (err instanceof multer.MulterError) {
+        const statusCode = err.code === "LIMIT_FILE_SIZE" ? 413 : 400;
+        return res.status(statusCode).json({
+          status: "error",
+          message: statusCode === 413 ? "Uploaded file is too large" : err.message || "Invalid upload"
+        });
+      }
+      if (err.code === "INVALID_FILE_EXTENSION") {
         return res.status(400).json({
           status: "error",
           message: err.message || "Invalid file type. Only .pdf, .xlsx, .xls, and .csv are supported."
         });
       }
-      return res.status(400).json({
-        status: "error",
-        message: err.message || "Bad Request"
-      });
+      return next(err);
     }
     if (!req.file) {
       return res.status(400).json({
@@ -524,7 +535,7 @@ app.post("/api/portfolios/:portfolioId/upload", authMiddleware, (req, res, next)
     const { portfolioId } = req.params;
 
     const job = await createDocImportJob(userId, portfolioId, {
-      originalName: req.file.originalname,
+      originalName: normalizeUploadFilename(req.file.originalname),
       mimeType: req.file.mimetype,
       size: req.file.size
     });
