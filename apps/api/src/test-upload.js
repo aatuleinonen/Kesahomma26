@@ -6,7 +6,7 @@ process.env.MOCK_DYNAMODB = "true";
 const app = require("./app");
 const { clearMockDb, createDocImportJob, getDocImportJob, markPortfolioDeleting, putPortfolio, updateDocImportJob } = require("./utils/ddb");
 const { clearMockDocuments, loadDocument } = require("./utils/documentStorage");
-const { processImportMessage } = require("./document-worker");
+const { handler: documentWorkerHandler, processImportMessage } = require("./document-worker");
 
 const PORT = Number(process.env.PORT || 3004);
 const server = app.listen(PORT, async () => {
@@ -289,6 +289,16 @@ const server = app.listen(PORT, async () => {
       throw new Error(`Expected 400 for malformed extracted numeric values, got ${invalidConfirm.status}`);
     }
     console.log("  PASS: Malformed extracted numeric values cannot be confirmed");
+    const finalAttemptResult = await documentWorkerHandler({ Records: [{
+      messageId: "final-read-attempt",
+      body: JSON.stringify({ userId: "dev-user-12345-uuid-67890", portfolioId, importId: unreadableImport.importId }),
+      attributes: { ApproximateReceiveCount: "3" }
+    }] });
+    const finalAttemptJob = await getDocImportJob("dev-user-12345-uuid-67890", unreadableImport.importId, portfolioId);
+    if (finalAttemptResult.batchItemFailures.length !== 0 || finalAttemptJob.status !== "FAILED") {
+      throw new Error(`Expected the final read attempt to become terminal, got: ${JSON.stringify(finalAttemptJob)}`);
+    }
+    console.log("  PASS: Final SQS read failure becomes terminal instead of stalling in RETRYING");
     await markPortfolioDeleting("dev-user-12345-uuid-67890", portfolioId);
     let blockedCreateError;
     try {
