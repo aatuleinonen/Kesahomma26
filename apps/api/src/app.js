@@ -14,8 +14,13 @@ const app = express();
 app.use(auditMiddleware);
 app.use(express.json({ limit: "100kb" }));
 
+const maxUploadSizeBytes = Number.parseInt(process.env.DOCUMENT_UPLOAD_MAX_BYTES, 10) || 10 * 1024 * 1024;
 const upload = multer({
   storage: multer.memoryStorage(),
+  limits: {
+    fileSize: maxUploadSizeBytes,
+    files: 1
+  },
   fileFilter: (req, file, cb) => {
     const allowedExtensions = [".pdf", ".xlsx", ".xls", ".csv"];
     const ext = path.extname(file.originalname || "").toLowerCase();
@@ -520,7 +525,11 @@ app.post("/api/portfolios/:portfolioId/upload", authMiddleware, (req, res, next)
     const userId = getUserId(req);
     const { portfolioId } = req.params;
 
-    const job = await createDocImportJob(userId, portfolioId);
+    const job = await createDocImportJob(userId, portfolioId, {
+      originalName: req.file.originalname,
+      mimeType: req.file.mimetype,
+      size: req.file.size
+    });
 
     // Call the background document parser worker (fire-and-forget)
     processDocumentImport(userId, portfolioId, job.importId, (status, data, err) => updateDocImportJob(userId, portfolioId, job.importId, status, data, err)).catch(console.error);
@@ -545,10 +554,10 @@ app.post("/api/portfolios/:portfolioId/upload", authMiddleware, (req, res, next)
 app.get("/api/portfolios/:portfolioId/upload/:importId", authMiddleware, async (req, res) => {
   try {
     const userId = getUserId(req);
-    const { importId } = req.params;
+    const { portfolioId, importId } = req.params;
 
     const job = await getDocImportJob(userId, importId);
-    if (!job) {
+    if (!job || job.portfolioId !== portfolioId) {
       return res.status(404).json({
         status: "error",
         message: "Document import job not found"
