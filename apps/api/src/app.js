@@ -661,12 +661,12 @@ app.post("/api/portfolios/:portfolioId/upload/:importId/confirm", authMiddleware
       });
     }
 
-    const { job: updatedJob, savedAssets } = await confirmDocImport(userId, job);
+    const { job: updatedJob, savedTransactions } = await confirmDocImport(userId, job);
 
     res.json({
       status: "success",
-      message: "Document import confirmed and assets created successfully",
-      importedCount: savedAssets.length,
+      message: "Document import confirmed and holdings created successfully",
+      importedCount: savedTransactions.length,
       job: {
         importId: updatedJob.importId,
         portfolioId: updatedJob.portfolioId,
@@ -681,7 +681,7 @@ app.post("/api/portfolios/:portfolioId/upload/:importId/confirm", authMiddleware
       });
     }
 
-    if (err?.code === "TOO_MANY_IMPORT_ASSETS") {
+    if (err?.code === "TOO_MANY_IMPORT_ASSETS" || err?.code === "INVALID_IMPORT_ASSETS") {
       return res.status(400).json({
         status: "error",
         message: err.message

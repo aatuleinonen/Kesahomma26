@@ -657,77 +657,32 @@ async function updateDocImportJob(userId, portfolioId, importId, status, extract
 }
 
 /**
- * Creates an asset record in a portfolio.
- * 
- * @param {string} userId - Cognito User ID (sub)
- * @param {string} portfolioId - Portfolio ID
- * @param {object} asset - Asset object ({ ticker, quantity, costBasis, assetId, etc. })
- * @returns {Promise<object>} The saved asset item.
- */
-async function createAsset(userId, portfolioId, asset) {
-  const assetId = asset.assetId || asset.ticker || crypto.randomUUID();
-  const pk = `USER#${userId}`;
-  const sk = `PORTFOLIO#${portfolioId}#ASSET#${assetId}`;
-  const item = {
-    PK: pk,
-    SK: sk,
-    portfolioId,
-    assetId,
-    ticker: asset.ticker,
-    quantity: parseFloat(asset.quantity) || 0,
-    costBasis: parseFloat(asset.costBasis) || 0,
-    type: "asset",
-    createdAt: new Date().toISOString()
-  };
-
-  if (isMock) {
-    const existingIdx = mockDb.findIndex(i => i.PK === pk && i.SK === sk);
-    if (existingIdx !== -1) {
-      mockDb[existingIdx] = item;
-    } else {
-      mockDb.push(item);
-    }
-    return item;
-  }
-
-  if (!ddbDocClient) {
-    throw new Error("DynamoDB client is not initialized");
-  }
-
-  await ddbDocClient.send(new PutCommand({
-    TableName: tableName,
-    Item: item
-  }));
-  return item;
-}
-
-/**
- * Batch writes multiple asset records into a portfolio.
- * 
- * @param {string} userId - Cognito User ID (sub)
- * @param {string} portfolioId - Portfolio ID
- * @param {Array<object>} assets - Array of asset objects
- * @returns {Promise<Array<object>>} The list of saved asset items.
- */
-async function batchWriteAssets(userId, portfolioId, assets) {
-  if (!Array.isArray(assets)) return [];
-  const savedAssets = [];
-  for (const asset of assets) {
-    const saved = await createAsset(userId, portfolioId, asset);
-    savedAssets.push(saved);
-  }
-  return savedAssets;
-}
-
-/**
- * Atomically saves extracted assets and marks an import job as completed.
- * DynamoDB transactions support at most 100 operations, leaving room for 99 assets and the job update.
+ * Atomically saves extracted holdings as portfolio transactions and completes an import job.
+ * DynamoDB transactions support at most 100 operations, leaving room for 99 holdings and the job update.
  */
 async function confirmDocImport(userId, job) {
-  const validAssets = (Array.isArray(job.extractedData) ? job.extractedData : [])
-    .filter(asset => asset && typeof asset === "object" && !Array.isArray(asset) && typeof asset.ticker === "string" && asset.ticker.trim());
+  const holdings = new Map();
+  for (const [index, asset] of (Array.isArray(job.extractedData) ? job.extractedData : []).entries()) {
+    const ticker = typeof asset?.ticker === "string" ? asset.ticker.trim().toUpperCase() : "";
+    const quantity = Number(asset?.quantity);
+    const costBasis = Number(asset?.costBasis);
+    if (!ticker || !Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(costBasis) || costBasis < 0) {
+      const err = new Error(`Extracted holding ${index + 1} has invalid ticker, quantity, or cost basis`);
+      err.code = "INVALID_IMPORT_ASSETS";
+      throw err;
+    }
+    const current = holdings.get(ticker) || { ticker, quantity: 0, costBasis: 0 };
+    current.quantity += quantity;
+    current.costBasis += costBasis;
+    holdings.set(ticker, current);
+  }
 
-  if (validAssets.length > 99) {
+  if (holdings.size === 0) {
+    const err = new Error("Cannot confirm document import without extracted holdings");
+    err.code = "INVALID_IMPORT_ASSETS";
+    throw err;
+  }
+  if (holdings.size > 99) {
     const err = new Error("Document import contains too many assets to confirm atomically");
     err.code = "TOO_MANY_IMPORT_ASSETS";
     throw err;
@@ -735,21 +690,24 @@ async function confirmDocImport(userId, job) {
 
   const pk = `USER#${userId}`;
   const now = new Date().toISOString();
-  const assetItems = [...new Map(validAssets.map(asset => {
-    const ticker = asset.ticker.trim();
-    const assetId = asset.assetId || ticker || crypto.randomUUID();
-    return [assetId, {
+  const baseTimestamp = Date.now();
+  const transactionItems = [...holdings.values()].map((holding, index) => {
+    const timestamp = new Date(baseTimestamp + index).toISOString();
+    return {
       PK: pk,
-      SK: `PORTFOLIO#${job.portfolioId}#ASSET#${assetId}`,
+      SK: `PORTFOLIO#${job.portfolioId}#TXN#${timestamp}`,
       portfolioId: job.portfolioId,
-      assetId,
-      ticker,
-      quantity: parseFloat(asset.quantity) || 0,
-      costBasis: parseFloat(asset.costBasis) || 0,
-      type: "asset",
+      type: "transfer_in",
+      ticker: holding.ticker,
+      quantity: holding.quantity,
+      price: holding.costBasis / holding.quantity,
+      amount: holding.costBasis,
+      costBasis: holding.costBasis,
+      timestamp,
+      sourceImportId: job.importId,
       createdAt: now
-    }];
-  })).values()];
+    };
+  });
 
   if (isMock) {
     const jobItem = mockDb.find(item => item.PK === pk && item.SK === job.SK);
@@ -759,14 +717,16 @@ async function confirmDocImport(userId, job) {
       throw err;
     }
 
-    const replacements = new Map(assetItems.map(item => [item.SK, item]));
-    const retainedItems = mockDb.filter(item => item.PK !== pk || !replacements.has(item.SK));
-    mockDb.length = 0;
-    mockDb.push(...retainedItems, ...assetItems);
+    if (transactionItems.some(item => mockDb.some(existing => existing.PK === item.PK && existing.SK === item.SK))) {
+      const err = new Error("An imported transaction already exists at the generated timestamp");
+      err.name = "ConditionalCheckFailedException";
+      throw err;
+    }
+    mockDb.push(...transactionItems);
     jobItem.status = "COMPLETED";
     jobItem.error = null;
     jobItem.updatedAt = now;
-    return { job: jobItem, savedAssets: assetItems };
+    return { job: jobItem, savedTransactions: transactionItems };
   }
 
   if (!ddbDocClient) {
@@ -775,7 +735,13 @@ async function confirmDocImport(userId, job) {
 
   await ddbDocClient.send(new TransactWriteCommand({
     TransactItems: [
-      ...assetItems.map(Item => ({ Put: { TableName: tableName, Item } })),
+      ...transactionItems.map(Item => ({
+        Put: {
+          TableName: tableName,
+          Item,
+          ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)"
+        }
+      })),
       {
         Update: {
           TableName: tableName,
@@ -800,7 +766,7 @@ async function confirmDocImport(userId, job) {
 
   return {
     job: { ...job, status: "COMPLETED", error: null, updatedAt: now },
-    savedAssets: assetItems
+    savedTransactions: transactionItems
   };
 }
 
@@ -820,8 +786,6 @@ module.exports = {
   createDocImportJob,
   getDocImportJob,
   updateDocImportJob,
-  createAsset,
-  batchWriteAssets,
   confirmDocImport,
   isMock
 };

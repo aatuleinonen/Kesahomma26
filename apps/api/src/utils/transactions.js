@@ -37,10 +37,11 @@ function calculatePortfolioState(transactions) {
         cash -= amount;
         break;
       case "buy":
+      case "transfer_in":
         if (ticker) {
           holdings[ticker] = (holdings[ticker] || 0) + quantity;
         }
-        cash -= amount;
+        if (type === "buy") cash -= amount;
         break;
       case "sell":
         if (ticker) {
@@ -208,10 +209,11 @@ function validateTransactionsState(transactions) {
         cash -= amount;
         break;
       case "buy":
+      case "transfer_in":
         if (ticker) {
           holdings[ticker] = (holdings[ticker] || 0) + quantity;
         }
-        cash -= amount;
+        if (type === "buy") cash -= amount;
         break;
       case "sell":
         if (ticker) {

@@ -145,7 +145,7 @@ const server = app.listen(PORT, async () => {
 
     // 5. Background Parser Worker Asynchronous Processing Test
     console.log("\nTest 5: Verify async background parser updates status to READY_FOR_REVIEW after delay...");
-    const csvFixture = "ticker,quantity,costBasis\nAAPL,10,1500\nVOO,5,2000";
+    const csvFixture = "ticker,quantity,costBasis\nAAPL,4,600\nAAPL,6,900\nVOO,5,2000";
     const { status: s5Post, data: d5Post } = await uploadFile("portfolio_import.csv", csvFixture, "text/csv");
     if (s5Post !== 201 || d5Post.status !== "success" || d5Post.job?.status !== "UPLOADED") {
       throw new Error(`Expected 201 with an UPLOADED job for test 5, got status ${s5Post} and data: ${JSON.stringify(d5Post)}`);
@@ -191,7 +191,16 @@ const server = app.listen(PORT, async () => {
     if (resConfirm1.status !== 200 || dConfirm1.status !== "success") {
       throw new Error(`Expected 200 OK for confirm, got status ${resConfirm1.status} and data: ${JSON.stringify(dConfirm1)}`);
     }
+    if (dConfirm1.importedCount !== 2) {
+      throw new Error(`Expected duplicate tickers to be aggregated into 2 transactions, got: ${JSON.stringify(dConfirm1)}`);
+    }
     console.log("  PASS: Confirm endpoint returned 200 OK");
+
+    const { status: holdingsStatus, data: holdingsData } = await getRequest(`/api/portfolios/${portfolioId}/holdings`);
+    if (holdingsStatus !== 200 || holdingsData.holdings?.AAPL !== 10 || holdingsData.holdings?.VOO !== 5 || holdingsData.cashBalance !== 0) {
+      throw new Error(`Expected confirmed imports to appear in portfolio holdings without changing cash, got: ${JSON.stringify(holdingsData)}`);
+    }
+    console.log("  PASS: Confirmed import is visible in canonical portfolio holdings");
 
     const { status: s6Get, data: d6Get } = await getRequest(`/api/portfolios/${portfolioId}/upload/${asyncImportId}`);
     if (s6Get !== 200 || d6Get?.job?.status !== "COMPLETED") {
@@ -209,6 +218,10 @@ const server = app.listen(PORT, async () => {
     if (resConfirm2.status !== 400 || dConfirm2.status !== "error") {
       throw new Error(`Expected 400 Bad Request on second confirm call, got status ${resConfirm2.status} and data: ${JSON.stringify(dConfirm2)}`);
     }
+    const { data: holdingsAfterRetry } = await getRequest(`/api/portfolios/${portfolioId}/holdings`);
+    if (holdingsAfterRetry.holdings?.AAPL !== 10 || holdingsAfterRetry.holdings?.VOO !== 5) {
+      throw new Error(`Expected a second confirmation attempt not to alter holdings, got: ${JSON.stringify(holdingsAfterRetry)}`);
+    }
     console.log("  PASS: Double-import attempt rejected with 400 Bad Request");
 
     const emptyImport = await createDocImportJob("dev-user-12345-uuid-67890", portfolioId);
@@ -221,6 +234,19 @@ const server = app.listen(PORT, async () => {
       throw new Error(`Expected 400 when confirming an empty extraction, got ${emptyConfirm.status}`);
     }
     console.log("  PASS: Empty extraction cannot be confirmed");
+
+    const invalidImport = await createDocImportJob("dev-user-12345-uuid-67890", portfolioId);
+    await updateDocImportJob("dev-user-12345-uuid-67890", portfolioId, invalidImport.importId, "READY_FOR_REVIEW", [
+      { ticker: "BROKEN", quantity: "2shares", costBasis: "NaN" }
+    ], null);
+    const invalidConfirm = await fetch(`http://localhost:${PORT}/api/portfolios/${portfolioId}/upload/${invalidImport.importId}/confirm`, {
+      method: "POST",
+      headers: { "Authorization": "Bearer dummy-token" }
+    });
+    if (invalidConfirm.status !== 400) {
+      throw new Error(`Expected 400 for malformed extracted numeric values, got ${invalidConfirm.status}`);
+    }
+    console.log("  PASS: Malformed extracted numeric values cannot be confirmed");
 
     console.log("\n--- All Document Upload API integration tests passed! ---");
 
