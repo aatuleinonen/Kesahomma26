@@ -4,7 +4,8 @@ process.env.BYPASS_AUTH = "true";
 process.env.MOCK_DYNAMODB = "true";
 
 const app = require("./app");
-const { clearMockDb, deletePortfolio, getPortfolios, putPortfolio } = require("./utils/ddb");
+const { clearMockDb, createDocImportJob, deletePortfolio, getPortfolios, putPortfolio } = require("./utils/ddb");
+const { loadDocument, storeDocument } = require("./utils/documentStorage");
 
 const PORT = Number(process.env.PORT || 3002);
 const server = app.listen(PORT, async () => {
@@ -159,6 +160,12 @@ const server = app.listen(PORT, async () => {
 
     // 13. Delete the portfolio and all of its remaining records
     console.log("Test 13: Delete portfolio and all related records...");
+    const sourceDocument = await storeDocument("dev-user-12345-uuid-67890", "my-tech-portfolio", "delete-test", {
+      originalName: "delete-test.csv",
+      mimeType: "text/csv",
+      buffer: Buffer.from("ticker,quantity,costBasis\nAAPL,1,100")
+    });
+    await createDocImportJob("dev-user-12345-uuid-67890", "my-tech-portfolio", sourceDocument, "delete-test");
     const { status: s13 } = await apiRequest("/api/portfolios/my-tech-portfolio", "DELETE");
     if (s13 !== 204) {
       throw new Error(`Expected 204 portfolio deletion, got status ${s13}`);
@@ -167,6 +174,15 @@ const server = app.listen(PORT, async () => {
     const { data: d13Transactions } = await apiRequest("/api/portfolios/my-tech-portfolio/transactions");
     if (d13Portfolios.portfolios.length !== 0 || d13Transactions.transactions.length !== 0) {
       throw new Error("Expected portfolio metadata and transactions to be deleted");
+    }
+    let documentReadError;
+    try {
+      await loadDocument(sourceDocument);
+    } catch (error) {
+      documentReadError = error;
+    }
+    if (documentReadError?.message !== "Uploaded document is not available") {
+      throw new Error("Expected the uploaded document to be deleted with the portfolio");
     }
     console.log("  PASS: Portfolio and related records deleted");
 
