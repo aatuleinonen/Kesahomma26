@@ -35,12 +35,12 @@ const upload = multer({
     files: 1
   },
   fileFilter: (req, file, cb) => {
-    const allowedExtensions = [".pdf", ".xlsx", ".xls", ".csv"];
     const ext = path.extname(file.originalname || "").toLowerCase();
-    if (allowedExtensions.includes(ext)) {
+    const allowedCsvMimeTypes = ["text/csv", "application/csv", "text/plain", "application/vnd.ms-excel", "application/octet-stream"];
+    if (ext === ".csv" && allowedCsvMimeTypes.includes(file.mimetype)) {
       cb(null, true);
     } else {
-      const err = new Error("Invalid file extension. Only .pdf, .xlsx, .xls, and .csv are supported.");
+      const err = new Error("Invalid file type. Only UTF-8 CSV documents are supported.");
       err.code = "INVALID_FILE_EXTENSION";
       cb(err);
     }

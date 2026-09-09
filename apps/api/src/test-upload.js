@@ -4,8 +4,8 @@ process.env.BYPASS_AUTH = "true";
 process.env.MOCK_DYNAMODB = "true";
 
 const app = require("./app");
-const { clearMockDb, putPortfolio } = require("./utils/ddb");
-const { clearMockDocuments } = require("./utils/documentStorage");
+const { clearMockDb, getDocImportJob, putPortfolio } = require("./utils/ddb");
+const { clearMockDocuments, loadDocument } = require("./utils/documentStorage");
 
 const PORT = Number(process.env.PORT || 3004);
 const server = app.listen(PORT, async () => {
@@ -58,17 +58,31 @@ const server = app.listen(PORT, async () => {
       return { status: res.status, data };
     };
 
-    // 1. Valid File Upload Tests (.pdf, .csv, .xlsx, .xls)
-    console.log("Test 1: Upload valid files (.pdf, .csv, .xlsx, .xls)...");
-    const validExtensions = ["doc.pdf", "data.csv", "sheet.xlsx", "legacy.xls"];
-    let createdImportId = null;
-    let unsupportedImportId = null;
+    const expectSourceDeleted = async importId => {
+      const job = await getDocImportJob("dev-user-12345-uuid-67890", importId, portfolioId);
+      let readError;
+      try {
+        await loadDocument(job.sourceDocument);
+      } catch (error) {
+        readError = error;
+      }
+      if (readError?.message !== "Uploaded document is not available") {
+        throw new Error(`Expected source document for ${importId} to be deleted`);
+      }
+    };
 
-    for (const filename of validExtensions) {
-      const content = filename.endsWith(".csv")
-        ? "ticker,quantity,costBasis\nMSFT,2,500"
-        : "sample content";
-      const { status, data } = await uploadFile(filename, content);
+    // 1. Valid CSV uploads with MIME types commonly emitted by clients.
+    console.log("Test 1: Upload CSV files with supported MIME variants...");
+    const validCsvUploads = [
+      ["data.csv", "text/csv"],
+      ["export.csv", "application/csv"],
+      ["browser.csv", "application/octet-stream"]
+    ];
+    let createdImportId = null;
+    const csvContent = "ticker,quantity,costBasis\nMSFT,2,500";
+
+    for (const [filename, mimeType] of validCsvUploads) {
+      const { status, data } = await uploadFile(filename, csvContent, mimeType);
       if (status !== 201) {
         throw new Error(`Expected 201 Created for ${filename}, got status ${status} and data: ${JSON.stringify(data)}`);
       }
@@ -76,13 +90,18 @@ const server = app.listen(PORT, async () => {
         throw new Error(`Expected a success response with an UPLOADED job for ${filename}, got: ${JSON.stringify(data)}`);
       }
       console.log(`  PASS: ${filename} uploaded successfully with importId: ${data.job.importId}`);
-      if (filename.endsWith(".csv")) createdImportId = data.job.importId;
-      if (filename.endsWith(".pdf")) unsupportedImportId = data.job.importId;
+      createdImportId ||= data.job.importId;
     }
 
-    // 2. Invalid File Upload Tests (.txt, .exe, no file)
+    const failedUpload = await uploadFile("missing-cost.csv", "ticker,quantity,costBasis\nAAPL,1,", "text/csv");
+    if (failedUpload.status !== 201) {
+      throw new Error(`Expected malformed CSV to be accepted for asynchronous validation, got ${failedUpload.status}`);
+    }
+    const failedImportId = failedUpload.data.job.importId;
+
+    // 2. Invalid and unsupported file uploads.
     console.log("\nTest 2: Upload invalid files returns 400 Bad Request...");
-    const invalidExtensions = ["script.exe", "notes.txt", "archive.zip"];
+    const invalidExtensions = ["doc.pdf", "sheet.xlsx", "legacy.xls", "script.exe", "notes.txt", "archive.zip"];
 
     for (const filename of invalidExtensions) {
       const { status, data } = await uploadFile(filename);
@@ -118,7 +137,7 @@ const server = app.listen(PORT, async () => {
     let failedJob;
     const failedStartTime = Date.now();
     while (Date.now() - failedStartTime < 2000) {
-      const result = await getRequest(`/api/portfolios/${portfolioId}/upload/${unsupportedImportId}`);
+      const result = await getRequest(`/api/portfolios/${portfolioId}/upload/${failedImportId}`);
       failedJob = result.data?.job;
       if (result.status === 200 && failedJob?.status === "FAILED") break;
       await new Promise(resolve => setTimeout(resolve, 50));
@@ -126,6 +145,7 @@ const server = app.listen(PORT, async () => {
     if (failedJob?.status !== "FAILED" || !failedJob.error) {
       throw new Error(`Expected failed parser status to include an actionable error, got: ${JSON.stringify(failedJob)}`);
     }
+    await expectSourceDeleted(failedImportId);
     console.log("  PASS: Failed parser status includes its error");
 
     // 4. GET Non-existent Job Returns 404
@@ -139,7 +159,7 @@ const server = app.listen(PORT, async () => {
 
     // 5. Background Parser Worker Asynchronous Processing Test
     console.log("\nTest 5: Verify async background parser updates status to READY_FOR_REVIEW after delay...");
-    const csvFixture = "ticker,quantity,costBasis\nAAPL,10,1500\nVOO,5,2000";
+    const csvFixture = "ticker,description,quantity,costBasis\nAAPL,\"Apple, Inc.\",10,1500\nVOO,Fund,5,2000";
     const { status: s5Post, data: d5Post } = await uploadFile("portfolio_import.csv", csvFixture, "text/csv");
     if (s5Post !== 201 || d5Post.status !== "success" || d5Post.job?.status !== "UPLOADED") {
       throw new Error(`Expected 201 with an UPLOADED job for test 5, got status ${s5Post} and data: ${JSON.stringify(d5Post)}`);
@@ -165,6 +185,7 @@ const server = app.listen(PORT, async () => {
     if (!Array.isArray(d5Get.job.extractedData) || d5Get.job.extractedData.length === 0) {
       throw new Error(`Expected extractedData array with holdings, got: ${JSON.stringify(d5Get?.job?.extractedData)}`);
     }
+    await expectSourceDeleted(asyncImportId);
     console.log(`  PASS: Background worker updated status to READY_FOR_REVIEW with ${d5Get.job.extractedData.length} holdings`);
 
     console.log("\n--- All Document Upload API integration tests passed! ---");

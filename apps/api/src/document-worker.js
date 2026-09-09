@@ -1,19 +1,34 @@
 // Processes durable SQS document-import messages outside the API Lambda lifecycle.
 const { processDocumentImport } = require("@kesahomma26/agents");
 const { getDocImportJob, updateDocImportJob } = require("./utils/ddb");
-const { loadDocument } = require("./utils/documentStorage");
+const { deleteDocument, loadDocument } = require("./utils/documentStorage");
 
 async function processImportMessage({ userId, portfolioId, importId }) {
   const job = await getDocImportJob(userId, importId, portfolioId);
-  if (!job || ["READY_FOR_REVIEW", "COMPLETED"].includes(job.status)) return;
-  const buffer = await loadDocument(job.sourceDocument);
-  await processDocumentImport(
+  if (!job) return;
+  if (["READY_FOR_REVIEW", "COMPLETED"].includes(job.status)) {
+    if (job.sourceDocument) await deleteDocument(job.sourceDocument);
+    return;
+  }
+
+  let buffer;
+  try {
+    buffer = await loadDocument(job.sourceDocument);
+  } catch (error) {
+    await updateDocImportJob(userId, portfolioId, importId, "FAILED", null, "Uploaded document could not be read; processing will be retried");
+    throw error;
+  }
+
+  const terminalStatus = await processDocumentImport(
     userId,
     portfolioId,
     importId,
     { buffer, metadata: job.sourceDocument },
     (status, data, error) => updateDocImportJob(userId, portfolioId, importId, status, data, error)
   );
+  if (job.sourceDocument && ["READY_FOR_REVIEW", "FAILED"].includes(terminalStatus)) {
+    await deleteDocument(job.sourceDocument);
+  }
 }
 
 async function handler(event) {

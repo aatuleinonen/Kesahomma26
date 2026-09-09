@@ -230,7 +230,7 @@ resource "aws_iam_role_policy" "document_worker" {
       },
       {
         Effect   = "Allow"
-        Action   = ["s3:GetObject"]
+        Action   = ["s3:DeleteObject", "s3:GetObject"]
         Resource = "${aws_s3_bucket.document_imports.arn}/*"
       },
       {
