@@ -269,9 +269,13 @@ resource "aws_iam_role_policy" "document_worker" {
           "sqs:ChangeMessageVisibility",
           "sqs:DeleteMessage",
           "sqs:GetQueueAttributes",
-          "sqs:ReceiveMessage",
-          "sqs:SendMessage"
+          "sqs:ReceiveMessage"
         ]
+        Resource = [aws_sqs_queue.document_imports.arn, aws_sqs_queue.document_imports_dlq.arn]
+      },
+      {
+        Effect   = "Allow"
+        Action   = "sqs:SendMessage"
         Resource = aws_sqs_queue.document_imports.arn
       }
     ]
@@ -299,6 +303,7 @@ resource "aws_lambda_function" "document_worker" {
     variables = {
       DYNAMODB_TABLE_NAME                 = aws_dynamodb_table.single_table.name
       DOCUMENT_IMPORT_BUCKET              = aws_s3_bucket.document_imports.id
+      DOCUMENT_IMPORT_DLQ_ARN             = aws_sqs_queue.document_imports_dlq.arn
       DOCUMENT_IMPORT_MAX_RECEIVE_COUNT   = tostring(local.document_import_max_receive_count)
       DOCUMENT_IMPORT_QUEUE_URL           = aws_sqs_queue.document_imports.url
       DOCUMENT_IMPORT_STALE_AFTER_SECONDS = "120"
@@ -315,6 +320,13 @@ resource "aws_lambda_function" "document_worker" {
 
 resource "aws_lambda_event_source_mapping" "document_imports" {
   event_source_arn        = aws_sqs_queue.document_imports.arn
+  function_name           = aws_lambda_function.document_worker.arn
+  batch_size              = 1
+  function_response_types = ["ReportBatchItemFailures"]
+}
+
+resource "aws_lambda_event_source_mapping" "document_imports_dlq" {
+  event_source_arn        = aws_sqs_queue.document_imports_dlq.arn
   function_name           = aws_lambda_function.document_worker.arn
   batch_size              = 1
   function_response_types = ["ReportBatchItemFailures"]

@@ -4,7 +4,7 @@ process.env.BYPASS_AUTH = "true";
 process.env.MOCK_DYNAMODB = "true";
 
 const app = require("./app");
-const { clearMockDb } = require("./utils/ddb");
+const { clearMockDb, putPortfolio } = require("./utils/ddb");
 
 const PORT = Number(process.env.PORT || 3001);
 const server = app.listen(PORT, async () => {
@@ -32,6 +32,7 @@ const server = app.listen(PORT, async () => {
 
     // Reset database for a clean start
     clearMockDb();
+    await putPortfolio("dev-user-12345-uuid-67890", { portfolioId: "portfolio-1", name: "Transaction test" });
 
     console.log("\n--- Executing Transaction & Holdings Tests ---");
 
@@ -252,6 +253,17 @@ const server = app.listen(PORT, async () => {
       throw new Error(`Expected invalid transfer-in price to return 400, got: ${JSON.stringify(invalidTransferData)}`);
     }
     console.log("  PASS: Missing or nonnumeric transfer-in price rejected cleanly");
+
+    const { status: infiniteAmountStatus } = await apiRequest("/api/portfolios/portfolio-1/transactions", "POST", {
+      type: "transfer_in", ticker: "VOO", quantity: 2, price: 10, amount: "Infinity"
+    });
+    const { status: infiniteQuantityStatus } = await apiRequest("/api/portfolios/portfolio-1/transactions", "POST", {
+      type: "transfer_in", ticker: "VOO", quantity: "Infinity", price: 10, amount: 20
+    });
+    if (infiniteAmountStatus !== 400 || infiniteQuantityStatus !== 400) {
+      throw new Error(`Expected non-finite transfer values to return 400, got amount=${infiniteAmountStatus}, quantity=${infiniteQuantityStatus}`);
+    }
+    console.log("  PASS: Infinite transfer amount and quantity rejected cleanly");
 
     console.log("Test 22: Create a zero-cost transfer-in without changing cash...");
     const { status: s21, data: d21 } = await apiRequest("/api/portfolios/portfolio-1/transactions", "POST", {

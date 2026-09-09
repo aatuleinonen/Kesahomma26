@@ -5,8 +5,8 @@ process.env.MOCK_DYNAMODB = "true";
 
 const app = require("./app");
 const { clearMockDb, createDocImportJob, getDocImportJob, markPortfolioDeleting, putPortfolio, updateDocImportJob } = require("./utils/ddb");
-const { clearMockDocuments, getMockDocumentCount, loadDocument, storeDocument } = require("./utils/documentStorage");
-const { handler: documentWorkerHandler, processImportMessage, requeueStaleDocumentImports } = require("./document-worker");
+const { clearMockDocuments, getMockDocumentCount, hasMockDocument, loadDocument, storeDocument } = require("./utils/documentStorage");
+const { finalizeImportFailure, handler: documentWorkerHandler, processImportMessage, requeueStaleDocumentImports } = require("./document-worker");
 
 const PORT = Number(process.env.PORT || 3004);
 const server = app.listen(PORT, async () => {
@@ -327,6 +327,20 @@ const server = app.listen(PORT, async () => {
       throw new Error(`Expected reconciliation to dispatch a stale UPLOADED job, got ${reconciledJob.status}`);
     }
     console.log("  PASS: Reconciliation dispatches stale UPLOADED jobs");
+
+    const exhaustedSource = await storeDocument("dev-user-12345-uuid-67890", portfolioId, "exhausted-processing", {
+      originalName: "exhausted.csv",
+      mimeType: "text/csv",
+      buffer: Buffer.from("ticker,quantity,costBasis\nAMZN,1,100")
+    });
+    const exhaustedImport = await createDocImportJob("dev-user-12345-uuid-67890", portfolioId, exhaustedSource, "exhausted-processing");
+    await updateDocImportJob("dev-user-12345-uuid-67890", portfolioId, exhaustedImport.importId, "PROCESSING", null, null);
+    await finalizeImportFailure({ userId: "dev-user-12345-uuid-67890", portfolioId, importId: exhaustedImport.importId });
+    const exhaustedJob = await getDocImportJob("dev-user-12345-uuid-67890", exhaustedImport.importId, portfolioId);
+    if (exhaustedJob.status !== "FAILED" || hasMockDocument(exhaustedSource)) {
+      throw new Error("Expected exhausted processing failures to become terminal and delete their source");
+    }
+    console.log("  PASS: Exhausted non-read failures become terminal and clean up their source");
 
     const deletingImport = await createDocImportJob("dev-user-12345-uuid-67890", portfolioId);
     await updateDocImportJob("dev-user-12345-uuid-67890", portfolioId, deletingImport.importId, "PROCESSING", null, null);

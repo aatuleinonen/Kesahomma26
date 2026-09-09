@@ -27,6 +27,12 @@ function normalizeUploadFilename(originalName) {
     .slice(0, 255) || "document";
 }
 
+function isPortfolioChildConflict(error) {
+  return error?.name === "ConditionalCheckFailedException"
+    || error?.code === "PORTFOLIO_UNAVAILABLE"
+    || error?.code === "CHILD_WRITE_CONFLICT";
+}
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
@@ -167,6 +173,9 @@ app.post("/api/portfolios/:portfolioId/transactions", authMiddleware, async (req
       transaction: savedTxn
     });
   } catch (err) {
+    if (isPortfolioChildConflict(err)) {
+      return res.status(409).json({ status: "error", message: err.message || "Portfolio is unavailable" });
+    }
     const statusCode =
       typeof err?.message === "string" && err.message.startsWith("Unauthorized") ? 401 : 500;
 
@@ -273,7 +282,7 @@ app.post("/api/portfolios", authMiddleware, async (req, res) => {
       portfolio: savedPortfolio
     });
   } catch (err) {
-    if (err?.name === "ConditionalCheckFailedException") {
+    if (isPortfolioChildConflict(err)) {
       return res.status(409).json({
         status: "error",
         message: err.message || "Portfolio already exists"
@@ -379,7 +388,7 @@ app.put("/api/portfolios/:portfolioId/transactions/:timestamp", authMiddleware, 
       transaction: savedTxn
     });
   } catch (err) {
-    if (err?.name === "ConditionalCheckFailedException") {
+    if (isPortfolioChildConflict(err)) {
       return res.status(409).json({
         status: "error",
         message: err.message || "Transaction already exists for the target timestamp"
@@ -462,7 +471,7 @@ app.post("/api/portfolios/:portfolioId/analysis", authMiddleware, requireAnalysi
       status: "PENDING"
     });
   } catch (err) {
-    if (err?.name === "ConditionalCheckFailedException") {
+    if (isPortfolioChildConflict(err)) {
       return res.status(409).json({
         status: "error",
         message: err.message || "Analysis job already exists"

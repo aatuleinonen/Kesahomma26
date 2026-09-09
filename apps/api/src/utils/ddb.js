@@ -22,6 +22,43 @@ if (!isMock) {
   }
 }
 
+function portfolioAvailableCondition(pk, portfolioId) {
+  return {
+    ConditionCheck: {
+      TableName: tableName,
+      Key: { PK: pk, SK: `METADATA#PORTFOLIO#${portfolioId}` },
+      ConditionExpression: "attribute_exists(PK) AND (attribute_not_exists(#deletionStatus) OR #deletionStatus <> :deleting)",
+      ExpressionAttributeNames: { "#deletionStatus": "deletionStatus" },
+      ExpressionAttributeValues: { ":deleting": "DELETING" }
+    }
+  };
+}
+
+function assertMockPortfolioAvailable(pk, portfolioId) {
+  const portfolio = mockDb.find(item => item.PK === pk && item.SK === `METADATA#PORTFOLIO#${portfolioId}`);
+  if (!portfolio || portfolio.deletionStatus === "DELETING") {
+    const error = new Error("Portfolio is unavailable");
+    error.name = "ConditionalCheckFailedException";
+    error.code = "PORTFOLIO_UNAVAILABLE";
+    throw error;
+  }
+}
+
+async function sendPortfolioTransaction(pk, portfolioId, transactItems) {
+  try {
+    await ddbDocClient.send(new TransactWriteCommand({
+      TransactItems: [portfolioAvailableCondition(pk, portfolioId), ...transactItems]
+    }));
+  } catch (error) {
+    const reasons = error?.CancellationReasons || error?.cancellationReasons;
+    if (error?.name === "TransactionCanceledException" && Array.isArray(reasons)) {
+      if (reasons[0]?.Code === "ConditionalCheckFailed") error.code = "PORTFOLIO_UNAVAILABLE";
+      else if (reasons.slice(1).some(reason => reason?.Code === "ConditionalCheckFailed")) error.code = "CHILD_WRITE_CONFLICT";
+    }
+    throw error;
+  }
+}
+
 /**
  * Saves a transaction to the DynamoDB table.
  * 
@@ -42,11 +79,13 @@ async function putTransaction(userId, portfolioId, txn) {
   };
 
   if (isMock) {
+    assertMockPortfolioAvailable(pk, portfolioId);
     // Mimic DynamoDB conditional writes: do not allow overwriting an existing transaction with the same PK+SK.
     const exists = mockDb.some(i => i.PK === pk && i.SK === sk);
     if (exists) {
       const err = new Error("Transaction already exists for the given timestamp");
       err.name = "ConditionalCheckFailedException";
+      err.code = "CHILD_WRITE_CONFLICT";
       throw err;
     }
     mockDb.push(item);
@@ -57,11 +96,13 @@ async function putTransaction(userId, portfolioId, txn) {
     throw new Error("DynamoDB client is not initialized");
   }
 
-  await ddbDocClient.send(new PutCommand({
-    TableName: tableName,
-    Item: item,
-    ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)"
-  }));
+  await sendPortfolioTransaction(pk, portfolioId, [{
+    Put: {
+      TableName: tableName,
+      Item: item,
+      ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)"
+    }
+  }]);
   return item;
 }
 
@@ -362,6 +403,7 @@ async function updateTransaction(userId, portfolioId, oldTimestamp, newTxn) {
   };
 
   if (isMock) {
+    assertMockPortfolioAvailable(pk, portfolioId);
     const oldIdx = mockDb.findIndex(i => i.PK === pk && i.SK === oldSk);
     if (oldIdx === -1) {
       throw new Error("Original transaction not found");
@@ -373,6 +415,7 @@ async function updateTransaction(userId, portfolioId, oldTimestamp, newTxn) {
       if (newExists) {
         const err = new Error("Transaction already exists for the target timestamp");
         err.name = "ConditionalCheckFailedException";
+        err.code = "CHILD_WRITE_CONFLICT";
         throw err;
       }
       // Remove old and add new atomically in the mock database
@@ -390,29 +433,30 @@ async function updateTransaction(userId, portfolioId, oldTimestamp, newTxn) {
   }
 
   if (oldSk !== newSk) {
-    await ddbDocClient.send(new TransactWriteCommand({
-      TransactItems: [
-        {
-          Put: {
-            TableName: tableName,
-            Item: item,
-            ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)"
-          }
-        },
-        {
-          Delete: {
-            TableName: tableName,
-            Key: { PK: pk, SK: oldSk }
-          }
+    await sendPortfolioTransaction(pk, portfolioId, [
+      {
+        Put: {
+          TableName: tableName,
+          Item: item,
+          ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)"
         }
-      ]
-    }));
+      },
+      {
+        Delete: {
+          TableName: tableName,
+          Key: { PK: pk, SK: oldSk },
+          ConditionExpression: "attribute_exists(PK) AND attribute_exists(SK)"
+        }
+      }
+    ]);
   } else {
-    // Update/put directly
-    await ddbDocClient.send(new PutCommand({
-      TableName: tableName,
-      Item: item
-    }));
+    await sendPortfolioTransaction(pk, portfolioId, [{
+      Put: {
+        TableName: tableName,
+        Item: item,
+        ConditionExpression: "attribute_exists(PK) AND attribute_exists(SK)"
+      }
+    }]);
   }
 
   return item;
@@ -451,6 +495,7 @@ async function createAnalysisJob(userId, portfolioId) {
   };
 
   if (isMock) {
+    assertMockPortfolioAvailable(pk, portfolioId);
     mockDb.push(item);
     return item;
   }
@@ -459,11 +504,13 @@ async function createAnalysisJob(userId, portfolioId) {
     throw new Error("DynamoDB client is not initialized");
   }
 
-  await ddbDocClient.send(new PutCommand({
-    TableName: tableName,
-    Item: item,
-    ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)"
-  }));
+  await sendPortfolioTransaction(pk, portfolioId, [{
+    Put: {
+      TableName: tableName,
+      Item: item,
+      ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)"
+    }
+  }]);
 
   return item;
 }

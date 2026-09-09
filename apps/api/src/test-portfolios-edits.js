@@ -4,7 +4,7 @@ process.env.BYPASS_AUTH = "true";
 process.env.MOCK_DYNAMODB = "true";
 
 const app = require("./app");
-const { clearMockDb, createDocImportJob, deletePortfolio, getPortfolios, putPortfolio } = require("./utils/ddb");
+const { clearMockDb, createAnalysisJob, createDocImportJob, deletePortfolio, getPortfolios, markPortfolioDeleting, putPortfolio, putTransaction, updateTransaction } = require("./utils/ddb");
 const { hasMockDocument, storeDocument } = require("./utils/documentStorage");
 
 const PORT = Number(process.env.PORT || 3002);
@@ -197,6 +197,35 @@ const server = app.listen(PORT, async () => {
       throw new Error("Expected tenant-scoped deletion to preserve the other user's portfolio");
     }
     console.log("  PASS: Tenant isolation preserved");
+
+    console.log("Test 16: Reject every child write after portfolio deletion starts...");
+    const deletingPortfolioId = "deleting-children";
+    const existingTimestamp = "2026-06-20T12:00:00.000Z";
+    await putPortfolio("dev-user-12345-uuid-67890", { portfolioId: deletingPortfolioId, name: "Deleting portfolio" });
+    await putTransaction("dev-user-12345-uuid-67890", deletingPortfolioId, {
+      type: "deposit",
+      amount: 100,
+      timestamp: existingTimestamp
+    });
+    await markPortfolioDeleting("dev-user-12345-uuid-67890", deletingPortfolioId);
+
+    for (const write of [
+      () => putTransaction("dev-user-12345-uuid-67890", deletingPortfolioId, {
+        type: "deposit", amount: 50, timestamp: "2026-06-20T12:01:00.000Z"
+      }),
+      () => updateTransaction("dev-user-12345-uuid-67890", deletingPortfolioId, existingTimestamp, {
+        type: "deposit", amount: 200, timestamp: existingTimestamp
+      }),
+      () => createAnalysisJob("dev-user-12345-uuid-67890", deletingPortfolioId)
+    ]) {
+      await write().then(
+        () => { throw new Error("Expected child write to be rejected for a deleting portfolio"); },
+        error => {
+          if (error?.code !== "PORTFOLIO_UNAVAILABLE") throw error;
+        }
+      );
+    }
+    console.log("  PASS: Transaction creation, transaction updates, and analysis jobs are blocked");
 
     console.log("\n--- All Portfolios & Edits tests passed successfully! ---");
   } catch (err) {

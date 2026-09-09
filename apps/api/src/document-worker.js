@@ -48,15 +48,37 @@ async function handler(event) {
     ? configuredMaxReceiveCount
     : 3;
   for (const record of event.Records || []) {
+    let message;
+    let finalAttempt = false;
     try {
       const receiveCount = Number.parseInt(record.attributes?.ApproximateReceiveCount || "1", 10);
-      await processImportMessage(JSON.parse(record.body), { finalAttempt: receiveCount >= maxReceiveCount });
+      const fromDeadLetterQueue = record.eventSourceARN === process.env.DOCUMENT_IMPORT_DLQ_ARN;
+      finalAttempt = fromDeadLetterQueue || receiveCount >= maxReceiveCount;
+      message = JSON.parse(record.body);
+      await processImportMessage(message, { finalAttempt });
     } catch (error) {
       console.error(`[DocParser] Import message ${record.messageId} failed:`, error);
+      if (finalAttempt && message) {
+        try {
+          await finalizeImportFailure(message);
+          continue;
+        } catch (finalizationError) {
+          console.error(`[DocParser] Import message ${record.messageId} terminal update failed:`, finalizationError);
+        }
+      }
       batchItemFailures.push({ itemIdentifier: record.messageId });
     }
   }
   return { batchItemFailures };
+}
+
+async function finalizeImportFailure({ userId, portfolioId, importId }) {
+  const job = await getDocImportJob(userId, importId, portfolioId);
+  if (!job) return;
+  if (!["FAILED", "READY_FOR_REVIEW", "COMPLETED"].includes(job.status)) {
+    await updateDocImportJob(userId, portfolioId, importId, "FAILED", null, "Document processing failed after multiple attempts");
+  }
+  if (job.sourceDocument) await deleteDocument(job.sourceDocument);
 }
 
 async function requeueStaleDocumentImports(now = new Date()) {
@@ -70,4 +92,4 @@ async function requeueStaleDocumentImports(now = new Date()) {
   return jobs.length;
 }
 
-module.exports = { handler, processImportMessage, requeueStaleDocumentImports };
+module.exports = { finalizeImportFailure, handler, processImportMessage, requeueStaleDocumentImports };

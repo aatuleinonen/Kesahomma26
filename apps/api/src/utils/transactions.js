@@ -82,16 +82,26 @@ function validateNewTransaction(newTxn, existingTxns) {
   
   const type = (newTxn.type || "").toLowerCase();
   const ticker = newTxn.ticker;
-  const quantity = parseFloat(newTxn.quantity) || 0;
-  const hasTransferPrice = newTxn.price !== null
+  const quantity = parseFloat(newTxn.quantity);
+  const hasFiniteQuantity = newTxn.quantity !== null
+    && newTxn.quantity !== undefined
+    && String(newTxn.quantity).trim() !== ""
+    && Number.isFinite(quantity);
+  const price = parseFloat(newTxn.price);
+  const hasFinitePrice = newTxn.price !== null
     && newTxn.price !== undefined
     && String(newTxn.price).trim() !== ""
-    && Number.isFinite(Number(newTxn.price));
-  const price = parseFloat(newTxn.price) || 0;
+    && Number.isFinite(price);
   
   let amount = parseFloat(newTxn.amount);
   if (isNaN(amount)) {
     amount = quantity * price;
+  }
+  if (!Number.isFinite(amount)) {
+    return {
+      valid: false,
+      error: "Amount must be a finite number"
+    };
   }
   if (type === "transfer_in" ? amount < 0 : amount <= 0) {
     return {
@@ -117,16 +127,16 @@ function validateNewTransaction(newTxn, existingTxns) {
         error: `Ticker symbol is required for type '${type}'`
       };
     }
-    if (quantity <= 0) {
+    if (!hasFiniteQuantity || quantity <= 0) {
       return {
         valid: false,
-        error: "Quantity must be greater than 0"
+        error: "Quantity is required and must be a finite number greater than 0"
       };
     }
-    if (type === "transfer_in" && !hasTransferPrice) {
+    if (!hasFinitePrice) {
       return {
         valid: false,
-        error: "Price is required and must be a finite number for type 'transfer_in'"
+        error: `Price is required and must be a finite number for type '${type}'`
       };
     }
     if (type === "transfer_in" ? price < 0 : price <= 0) {
