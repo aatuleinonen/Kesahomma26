@@ -58,6 +58,11 @@ output "api_lambda_function_name" {
   description = "The Lambda function updated by the POC deployment script."
 }
 
+output "document_worker_lambda_function_name" {
+  value       = aws_lambda_function.document_worker.function_name
+  description = "The document worker Lambda updated by the POC deployment script."
+}
+
 output "frontend_bucket_name" {
   value       = aws_s3_bucket.frontend.id
   description = "The private S3 bucket containing built frontend assets."
