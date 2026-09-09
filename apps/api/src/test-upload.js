@@ -64,11 +64,11 @@ const server = app.listen(PORT, async () => {
       if (status !== 201) {
         throw new Error(`Expected 201 Created for ${filename}, got status ${status} and data: ${JSON.stringify(data)}`);
       }
-      if (!data.importId || data.status !== "UPLOADED") {
-        throw new Error(`Expected response to contain importId and status "UPLOADED" for ${filename}, got: ${JSON.stringify(data)}`);
+      if (!data.job?.importId || data.status !== "success" || data.job.status !== "UPLOADED") {
+        throw new Error(`Expected a success response with an UPLOADED job for ${filename}, got: ${JSON.stringify(data)}`);
       }
-      console.log(`  PASS: ${filename} uploaded successfully with importId: ${data.importId}`);
-      createdImportId = data.importId;
+      console.log(`  PASS: ${filename} uploaded successfully with importId: ${data.job.importId}`);
+      createdImportId = data.job.importId;
     }
 
     // 2. Invalid File Upload Tests (.txt, .exe, no file)
