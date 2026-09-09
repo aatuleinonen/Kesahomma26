@@ -4,7 +4,7 @@ process.env.BYPASS_AUTH = "true";
 process.env.MOCK_DYNAMODB = "true";
 
 const app = require("./app");
-const { clearMockDb, createDocImportJob, getDocImportJob, markPortfolioDeleting, putPortfolio, updateDocImportJob } = require("./utils/ddb");
+const { claimDocImportDispatch, clearMockDb, createDocImportJob, getDocImportJob, getStaleUploadedDocImports, markPortfolioDeleting, putPortfolio, updateDocImportJob } = require("./utils/ddb");
 const { clearMockDocuments, getMockDocumentCount, hasMockDocument, loadDocument, storeDocument } = require("./utils/documentStorage");
 const { finalizeImportFailure, handler: documentWorkerHandler, processImportMessage, requeueStaleDocumentImports } = require("./document-worker");
 
@@ -320,7 +320,19 @@ const server = app.listen(PORT, async () => {
       buffer: Buffer.from("ticker,quantity,costBasis\nNVDA,1,100")
     });
     const undispatchedImport = await createDocImportJob("dev-user-12345-uuid-67890", portfolioId, undispatchedSource, "undispatched-import");
-    await requeueStaleDocumentImports(new Date(Date.now() + 5 * 60 * 1000));
+    const firstReconciliation = new Date(Date.now() + 5 * 60 * 1000);
+    const firstCutoff = new Date(firstReconciliation.getTime() - 120 * 1000).toISOString();
+    const [staleJob] = await getStaleUploadedDocImports(firstCutoff);
+    if (!staleJob || !await claimDocImportDispatch(staleJob, firstReconciliation.toISOString())) {
+      throw new Error("Expected the stale import to acquire a dispatch lease");
+    }
+    if (await claimDocImportDispatch(staleJob, firstReconciliation.toISOString())) {
+      throw new Error("Expected the same stale candidate to be claimed only once");
+    }
+    if ((await getStaleUploadedDocImports(firstCutoff)).some(job => job.importId === undispatchedImport.importId)) {
+      throw new Error("Expected the dispatch lease to suppress immediate duplicate enqueueing");
+    }
+    await requeueStaleDocumentImports(new Date(firstReconciliation.getTime() + 121 * 1000));
     await new Promise(resolve => setTimeout(resolve, 10));
     const reconciledJob = await getDocImportJob("dev-user-12345-uuid-67890", undispatchedImport.importId, portfolioId);
     if (reconciledJob.status !== "READY_FOR_REVIEW") {

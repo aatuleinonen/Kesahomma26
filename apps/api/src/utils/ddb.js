@@ -1,6 +1,6 @@
 const crypto = require("crypto");
 const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
-const { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, ScanCommand, DeleteCommand, TransactWriteCommand, UpdateCommand, BatchWriteCommand } = require("@aws-sdk/lib-dynamodb");
+const { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, DeleteCommand, TransactWriteCommand, UpdateCommand, BatchWriteCommand } = require("@aws-sdk/lib-dynamodb");
 
 const tableName = process.env.DYNAMODB_TABLE_NAME || "kesahomma26-data";
 
@@ -610,18 +610,21 @@ async function updateAnalysisJob(userId, portfolioId, jobId, status, result = nu
 async function createDocImportJob(userId, portfolioId, sourceDocument = null, importId = crypto.randomUUID()) {
   const pk = `USER#${userId}`;
   const sk = `PORTFOLIO#${portfolioId}#DOC_IMPORT#${importId}`;
+  const createdAt = new Date().toISOString();
   const item = {
     PK: pk,
     SK: sk,
     GSI1PK: `USER#${userId}#DOC_IMPORT#${importId}`,
     GSI1SK: `PORTFOLIO#${portfolioId}`,
+    GSI2PK: "DOC_IMPORT#UPLOADED",
+    GSI2SK: `${createdAt}#${importId}`,
     importId,
     portfolioId,
     type: "document_import",
     status: "UPLOADED",
     sourceDocument,
     extractedData: null,
-    createdAt: new Date().toISOString()
+    createdAt
   };
 
   if (isMock) {
@@ -714,37 +717,65 @@ async function getDocImportJob(userId, importId, portfolioId) {
   return response.Items?.[0] || null;
 }
 
-/** Finds stale uploaded jobs so a scheduled worker can repair API-to-SQS dispatch gaps. */
+/** Finds stale uploaded jobs through the sparse dispatch index. */
 async function getStaleUploadedDocImports(cutoffIso, maxJobs = 25) {
   const toDispatchMessage = item => ({
     userId: item.PK.slice("USER#".length),
     portfolioId: item.portfolioId,
-    importId: item.importId
+    importId: item.importId,
+    dispatchIndexKey: item.GSI2SK
   });
-  const isStaleUpload = item => item.type === "document_import"
-    && item.status === "UPLOADED"
-    && typeof item.createdAt === "string"
-    && item.createdAt <= cutoffIso;
+  const isStaleUpload = item => item.GSI2PK === "DOC_IMPORT#UPLOADED"
+    && typeof item.GSI2SK === "string"
+    && item.GSI2SK <= `${cutoffIso}#\uffff`;
 
   if (isMock) return mockDb.filter(isStaleUpload).slice(0, maxJobs).map(toDispatchMessage);
   if (!ddbDocClient) throw new Error("DynamoDB client is not initialized");
 
-  const jobs = [];
-  let exclusiveStartKey;
-  do {
-    const response = await ddbDocClient.send(new ScanCommand({
-      TableName: tableName,
-      FilterExpression: "#type = :type AND #status = :uploaded AND #createdAt <= :cutoff",
-      ExpressionAttributeNames: { "#type": "type", "#status": "status", "#createdAt": "createdAt" },
-      ExpressionAttributeValues: { ":type": "document_import", ":uploaded": "UPLOADED", ":cutoff": cutoffIso },
-      ProjectionExpression: "PK, portfolioId, importId",
-      ExclusiveStartKey: exclusiveStartKey
-    }));
-    jobs.push(...(response.Items || []).map(toDispatchMessage));
-    exclusiveStartKey = response.LastEvaluatedKey;
-  } while (exclusiveStartKey && jobs.length < maxJobs);
+  const response = await ddbDocClient.send(new QueryCommand({
+    TableName: tableName,
+    IndexName: "GSI2",
+    KeyConditionExpression: "GSI2PK = :uploaded AND GSI2SK <= :cutoff",
+    ExpressionAttributeValues: { ":uploaded": "DOC_IMPORT#UPLOADED", ":cutoff": `${cutoffIso}#\uffff` },
+    ProjectionExpression: "PK, SK, portfolioId, importId, GSI2SK",
+    Limit: maxJobs
+  }));
+  return (response.Items || []).map(toDispatchMessage);
+}
 
-  return jobs.slice(0, maxJobs);
+/** Acquires a dispatch lease so overlapping schedulers cannot repeatedly enqueue the same job. */
+async function claimDocImportDispatch(job, dispatchedAtIso) {
+  const pk = `USER#${job.userId}`;
+  const sk = `PORTFOLIO#${job.portfolioId}#DOC_IMPORT#${job.importId}`;
+  const nextIndexKey = `${dispatchedAtIso}#${job.importId}`;
+  if (isMock) {
+    const item = mockDb.find(candidate => candidate.PK === pk && candidate.SK === sk);
+    if (!item || item.status !== "UPLOADED" || item.GSI2SK !== job.dispatchIndexKey) return false;
+    item.GSI2SK = nextIndexKey;
+    item.lastDispatchedAt = dispatchedAtIso;
+    return true;
+  }
+  if (!ddbDocClient) throw new Error("DynamoDB client is not initialized");
+
+  try {
+    await ddbDocClient.send(new UpdateCommand({
+      TableName: tableName,
+      Key: { PK: pk, SK: sk },
+      UpdateExpression: "SET GSI2SK = :nextIndexKey, #lastDispatchedAt = :dispatchedAt",
+      ConditionExpression: "#status = :uploaded AND GSI2SK = :expectedIndexKey",
+      ExpressionAttributeNames: { "#status": "status", "#lastDispatchedAt": "lastDispatchedAt" },
+      ExpressionAttributeValues: {
+        ":uploaded": "UPLOADED",
+        ":expectedIndexKey": job.dispatchIndexKey,
+        ":nextIndexKey": nextIndexKey,
+        ":dispatchedAt": dispatchedAtIso
+      }
+    }));
+    return true;
+  } catch (error) {
+    if (error?.name === "ConditionalCheckFailedException") return false;
+    throw error;
+  }
 }
 
 /**
@@ -780,6 +811,8 @@ async function updateDocImportJob(userId, portfolioId, importId, status, extract
       throw err;
     }
     item.status = status;
+    delete item.GSI2PK;
+    delete item.GSI2SK;
     item.extractedData = extractedData;
     item.error = error;
     item.updatedAt = new Date().toISOString();
@@ -794,7 +827,7 @@ async function updateDocImportJob(userId, portfolioId, importId, status, extract
   const response = await ddbDocClient.send(new UpdateCommand({
     TableName: tableName,
     Key: { PK: pk, SK: sk },
-    UpdateExpression: "SET #status = :status, #extractedData = :extractedData, #error = :error, #updatedAt = :updatedAt",
+    UpdateExpression: "SET #status = :status, #extractedData = :extractedData, #error = :error, #updatedAt = :updatedAt REMOVE GSI2PK, GSI2SK",
     ExpressionAttributeNames: {
       "#status": "status",
       "#extractedData": "extractedData",
@@ -995,6 +1028,7 @@ module.exports = {
   createDocImportJob,
   getDocImportJob,
   getStaleUploadedDocImports,
+  claimDocImportDispatch,
   updateDocImportJob,
   confirmDocImport,
   getPortfolioDocumentSources,
