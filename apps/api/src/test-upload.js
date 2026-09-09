@@ -145,6 +145,12 @@ const server = app.listen(PORT, async () => {
     }
     console.log(`  PASS: Background worker updated status to READY_FOR_REVIEW with ${d5Get.job.extractedData.length} holdings`);
 
+    const { status: wrongPortfolioStatus } = await getRequest(`/api/portfolios/wrong-portfolio/upload/${asyncImportId}`);
+    if (wrongPortfolioStatus !== 404) {
+      throw new Error(`Expected 404 for a mismatched portfolio, got ${wrongPortfolioStatus}`);
+    }
+    console.log("  PASS: Mismatched portfolio cannot read the import job");
+
     // 6. Confirm Document Import Test
     console.log("\nTest 6: Confirm document import job and prevent double-imports...");
     const resConfirm1 = await fetch(`http://localhost:${PORT}/api/portfolios/${portfolioId}/upload/${asyncImportId}/confirm`, {

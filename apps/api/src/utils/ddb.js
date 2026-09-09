@@ -694,6 +694,90 @@ async function batchWriteAssets(userId, portfolioId, assets) {
   return savedAssets;
 }
 
+/**
+ * Atomically saves extracted assets and marks an import job as completed.
+ * DynamoDB transactions support at most 100 operations, leaving room for 99 assets and the job update.
+ */
+async function confirmDocImport(userId, job) {
+  const validAssets = (Array.isArray(job.extractedData) ? job.extractedData : [])
+    .filter(asset => asset && typeof asset === "object" && !Array.isArray(asset));
+
+  if (validAssets.length > 99) {
+    const err = new Error("Document import contains too many assets to confirm atomically");
+    err.code = "TOO_MANY_IMPORT_ASSETS";
+    throw err;
+  }
+
+  const pk = `USER#${userId}`;
+  const now = new Date().toISOString();
+  const assetItems = [...new Map(validAssets.map(asset => {
+    const assetId = asset.assetId || asset.ticker || crypto.randomUUID();
+    return [assetId, {
+      PK: pk,
+      SK: `PORTFOLIO#${job.portfolioId}#ASSET#${assetId}`,
+      portfolioId: job.portfolioId,
+      assetId,
+      ticker: asset.ticker,
+      quantity: parseFloat(asset.quantity) || 0,
+      costBasis: parseFloat(asset.costBasis) || 0,
+      type: "asset",
+      createdAt: now
+    }];
+  })).values()];
+
+  if (isMock) {
+    const jobItem = mockDb.find(item => item.PK === pk && item.SK === job.SK);
+    if (!jobItem || jobItem.status !== "READY_FOR_REVIEW") {
+      const err = new Error("Document import is no longer ready for confirmation");
+      err.name = "ConditionalCheckFailedException";
+      throw err;
+    }
+
+    const replacements = new Map(assetItems.map(item => [item.SK, item]));
+    const retainedItems = mockDb.filter(item => item.PK !== pk || !replacements.has(item.SK));
+    mockDb.length = 0;
+    mockDb.push(...retainedItems, ...assetItems);
+    jobItem.status = "COMPLETED";
+    jobItem.error = null;
+    jobItem.updatedAt = now;
+    return { job: jobItem, savedAssets: assetItems };
+  }
+
+  if (!ddbDocClient) {
+    throw new Error("DynamoDB client is not initialized");
+  }
+
+  await ddbDocClient.send(new TransactWriteCommand({
+    TransactItems: [
+      ...assetItems.map(Item => ({ Put: { TableName: tableName, Item } })),
+      {
+        Update: {
+          TableName: tableName,
+          Key: { PK: pk, SK: job.SK },
+          UpdateExpression: "SET #status = :completed, #error = :error, #updatedAt = :updatedAt",
+          ExpressionAttributeNames: {
+            "#status": "status",
+            "#error": "error",
+            "#updatedAt": "updatedAt"
+          },
+          ExpressionAttributeValues: {
+            ":completed": "COMPLETED",
+            ":ready": "READY_FOR_REVIEW",
+            ":error": null,
+            ":updatedAt": now
+          },
+          ConditionExpression: "#status = :ready"
+        }
+      }
+    ]
+  }));
+
+  return {
+    job: { ...job, status: "COMPLETED", error: null, updatedAt: now },
+    savedAssets: assetItems
+  };
+}
+
 module.exports = {
   putTransaction,
   getTransactions,
@@ -711,5 +795,6 @@ module.exports = {
   updateDocImportJob,
   createAsset,
   batchWriteAssets,
+  confirmDocImport,
   isMock
 };

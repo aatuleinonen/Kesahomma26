@@ -5,7 +5,7 @@ const multer = require("multer");
 const { authMiddleware } = require("./middleware/auth");
 const { auditMiddleware, logEvent } = require("./utils/logger");
 const { getUserId, buildIsolatedQueryParams } = require("./utils/db");
-const { putTransaction, getTransactions, getPortfolios, putPortfolio, deletePortfolio, deleteTransaction, updateTransaction, createAnalysisJob, getAnalysisJob, updateAnalysisJob, createDocImportJob, getDocImportJob, updateDocImportJob, batchWriteAssets } = require("./utils/ddb");
+const { putTransaction, getTransactions, getPortfolios, putPortfolio, deletePortfolio, deleteTransaction, updateTransaction, createAnalysisJob, getAnalysisJob, updateAnalysisJob, createDocImportJob, getDocImportJob, updateDocImportJob, confirmDocImport } = require("./utils/ddb");
 const { validateNewTransaction, calculatePortfolioState, validateTransactionsState } = require("./utils/transactions");
 const { processDocumentImport } = require("@kesahomma26/agents");
 
@@ -635,7 +635,7 @@ app.post("/api/portfolios/:portfolioId/upload/:importId/confirm", authMiddleware
     const { portfolioId, importId } = req.params;
 
     const job = await getDocImportJob(userId, importId);
-    if (!job) {
+    if (!job || job.portfolioId !== portfolioId) {
       return res.status(404).json({
         status: "error",
         message: "Document import job not found"
@@ -649,10 +649,7 @@ app.post("/api/portfolios/:portfolioId/upload/:importId/confirm", authMiddleware
       });
     }
 
-    const assets = Array.isArray(job.extractedData) ? job.extractedData : [];
-    const savedAssets = await batchWriteAssets(userId, portfolioId, assets);
-
-    const updatedJob = await updateDocImportJob(userId, portfolioId, importId, "COMPLETED", job.extractedData, null);
+    const { job: updatedJob, savedAssets } = await confirmDocImport(userId, job);
 
     res.json({
       status: "success",
@@ -665,6 +662,20 @@ app.post("/api/portfolios/:portfolioId/upload/:importId/confirm", authMiddleware
       }
     });
   } catch (err) {
+    if (err?.name === "ConditionalCheckFailedException" || err?.name === "TransactionCanceledException") {
+      return res.status(409).json({
+        status: "error",
+        message: "Document import was already confirmed or is no longer ready for confirmation"
+      });
+    }
+
+    if (err?.code === "TOO_MANY_IMPORT_ASSETS") {
+      return res.status(400).json({
+        status: "error",
+        message: err.message
+      });
+    }
+
     const statusCode =
       typeof err?.message === "string" && err.message.startsWith("Unauthorized") ? 401 : 500;
 
