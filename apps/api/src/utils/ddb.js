@@ -507,9 +507,10 @@ async function updateAnalysisJob(userId, portfolioId, jobId, status, result = nu
  * 
  * @param {string} userId - Cognito User ID (sub)
  * @param {string} portfolioId - Portfolio ID
+ * @param {object} sourceDocument - Uploaded document metadata retained with the job.
  * @returns {Promise<object>} The created doc import job item.
  */
-async function createDocImportJob(userId, portfolioId) {
+async function createDocImportJob(userId, portfolioId, sourceDocument = null) {
   const importId = crypto.randomUUID();
   const pk = `USER#${userId}`;
   const sk = `PORTFOLIO#${portfolioId}#DOC_IMPORT#${importId}`;
@@ -522,6 +523,7 @@ async function createDocImportJob(userId, portfolioId) {
     portfolioId,
     type: "document_import",
     status: "UPLOADED",
+    sourceDocument,
     extractedData: null,
     createdAt: new Date().toISOString()
   };
@@ -568,7 +570,8 @@ async function getDocImportJob(userId, importId) {
     KeyConditionExpression: "GSI1PK = :gsi1pk",
     ExpressionAttributeValues: {
       ":gsi1pk": gsi1pk
-    }
+    },
+    Limit: 1
   }));
 
   return response.Items?.[0] || null;
@@ -710,6 +713,3 @@ module.exports = {
   batchWriteAssets,
   isMock
 };
-
-
-
