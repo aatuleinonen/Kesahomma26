@@ -670,6 +670,16 @@ app.post("/api/portfolios/:portfolioId/upload/:importId/confirm", authMiddleware
       });
     }
 
+    const hasUsableAssets = Array.isArray(job.extractedData) && job.extractedData.some(asset =>
+      asset && typeof asset === "object" && !Array.isArray(asset) && typeof asset.ticker === "string" && asset.ticker.trim()
+    );
+    if (!hasUsableAssets) {
+      return res.status(400).json({
+        status: "error",
+        message: "Cannot confirm document import without extracted holdings"
+      });
+    }
+
     const { job: updatedJob, savedAssets } = await confirmDocImport(userId, job);
 
     res.json({

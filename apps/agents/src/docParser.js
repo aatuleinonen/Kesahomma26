@@ -8,7 +8,7 @@
  * @param {function} updateJobStatus - Injected callback function to persist job status changes
  */
 async function processDocumentImport(userId, portfolioId, importId, document, updateJobStatus) {
-  console.log(`[DocParser] Picked up document import job ${importId} for user ${userId} and portfolio ${portfolioId}`);
+  console.log(`[DocParser] Picked up document import job ${importId}`);
   try {
     if (!Buffer.isBuffer(document?.buffer)) {
       throw new Error("Document import is missing uploaded file bytes");

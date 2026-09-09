@@ -4,7 +4,7 @@ process.env.BYPASS_AUTH = "true";
 process.env.MOCK_DYNAMODB = "true";
 
 const app = require("./app");
-const { clearMockDb } = require("./utils/ddb");
+const { clearMockDb, createDocImportJob, updateDocImportJob } = require("./utils/ddb");
 
 const PORT = Number(process.env.PORT || 3004);
 const server = app.listen(PORT, async () => {
@@ -194,6 +194,17 @@ const server = app.listen(PORT, async () => {
       throw new Error(`Expected 400 Bad Request on second confirm call, got status ${resConfirm2.status} and data: ${JSON.stringify(dConfirm2)}`);
     }
     console.log("  PASS: Double-import attempt rejected with 400 Bad Request");
+
+    const emptyImport = await createDocImportJob("dev-user-12345-uuid-67890", portfolioId);
+    await updateDocImportJob("dev-user-12345-uuid-67890", portfolioId, emptyImport.importId, "READY_FOR_REVIEW", [], null);
+    const emptyConfirm = await fetch(`http://localhost:${PORT}/api/portfolios/${portfolioId}/upload/${emptyImport.importId}/confirm`, {
+      method: "POST",
+      headers: { "Authorization": "Bearer dummy-token" }
+    });
+    if (emptyConfirm.status !== 400) {
+      throw new Error(`Expected 400 when confirming an empty extraction, got ${emptyConfirm.status}`);
+    }
+    console.log("  PASS: Empty extraction cannot be confirmed");
 
     console.log("\n--- All Document Upload API integration tests passed! ---");
 
