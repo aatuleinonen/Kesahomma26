@@ -23,13 +23,14 @@ const server = app.listen(PORT, async () => {
 
     // Helper to perform multipart upload
     const uploadFile = async (filename, content = "sample content", mimeType) => {
-      const formData = new FormData();
+      const extension = filename.slice(filename.lastIndexOf(".")).toLowerCase();
       const uploadMimeType = mimeType || {
         ".pdf": "application/pdf",
         ".csv": "text/csv",
         ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         ".xls": "application/vnd.ms-excel"
-      }[filename.slice(filename.lastIndexOf(".")).toLowerCase()] || "application/octet-stream";
+      }[extension] || "application/octet-stream";
+      const formData = new FormData();
       const blob = new Blob([content], { type: uploadMimeType });
       formData.append("file", blob, filename);
 
@@ -61,9 +62,13 @@ const server = app.listen(PORT, async () => {
     console.log("Test 1: Upload valid files (.pdf, .csv, .xlsx, .xls)...");
     const validExtensions = ["doc.pdf", "data.csv", "sheet.xlsx", "legacy.xls"];
     let createdImportId = null;
+    let unsupportedImportId = null;
 
     for (const filename of validExtensions) {
-      const { status, data } = await uploadFile(filename);
+      const content = filename.endsWith(".csv")
+        ? "ticker,quantity,costBasis\nMSFT,2,500"
+        : "sample content";
+      const { status, data } = await uploadFile(filename, content);
       if (status !== 201) {
         throw new Error(`Expected 201 Created for ${filename}, got status ${status} and data: ${JSON.stringify(data)}`);
       }
@@ -71,7 +76,8 @@ const server = app.listen(PORT, async () => {
         throw new Error(`Expected a success response with an UPLOADED job for ${filename}, got: ${JSON.stringify(data)}`);
       }
       console.log(`  PASS: ${filename} uploaded successfully with importId: ${data.job.importId}`);
-      createdImportId = data.job.importId;
+      if (filename.endsWith(".csv")) createdImportId = data.job.importId;
+      if (filename.endsWith(".pdf")) unsupportedImportId = data.job.importId;
     }
 
     // 2. Invalid File Upload Tests (.txt, .exe, no file)
@@ -115,6 +121,19 @@ const server = app.listen(PORT, async () => {
     }
     console.log(`  PASS: GET status verified cleanly for importId ${createdImportId}`);
 
+    let failedJob;
+    const failedStartTime = Date.now();
+    while (Date.now() - failedStartTime < 2000) {
+      const result = await getRequest(`/api/portfolios/${portfolioId}/upload/${unsupportedImportId}`);
+      failedJob = result.data?.job;
+      if (result.status === 200 && failedJob?.status === "FAILED") break;
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    if (failedJob?.status !== "FAILED" || !failedJob.error) {
+      throw new Error(`Expected failed parser status to include an actionable error, got: ${JSON.stringify(failedJob)}`);
+    }
+    console.log("  PASS: Failed parser status includes its error");
+
     // 4. GET Non-existent Job Returns 404
     console.log("\nTest 4: GET non-existent import job returns 404...");
     const fakeImportId = "00000000-0000-0000-0000-000000000000";
@@ -126,7 +145,8 @@ const server = app.listen(PORT, async () => {
 
     // 5. Background Parser Worker Asynchronous Processing Test
     console.log("\nTest 5: Verify async background parser updates status to READY_FOR_REVIEW after delay...");
-    const { status: s5Post, data: d5Post } = await uploadFile("portfolio_import.pdf");
+    const csvFixture = "ticker,quantity,costBasis\nAAPL,10,1500\nVOO,5,2000";
+    const { status: s5Post, data: d5Post } = await uploadFile("portfolio_import.csv", csvFixture, "text/csv");
     if (s5Post !== 201 || d5Post.status !== "success" || d5Post.job?.status !== "UPLOADED") {
       throw new Error(`Expected 201 with an UPLOADED job for test 5, got status ${s5Post} and data: ${JSON.stringify(d5Post)}`);
     }

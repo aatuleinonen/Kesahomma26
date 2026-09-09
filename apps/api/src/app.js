@@ -8,8 +8,8 @@ const { auditMiddleware, logEvent } = require("./utils/logger");
 const { getUserId, buildIsolatedQueryParams } = require("./utils/db");
 const { putTransaction, getTransactions, getPortfolios, getPortfolio, putPortfolio, deletePortfolio, deleteTransaction, updateTransaction, createAnalysisJob, getAnalysisJob, updateAnalysisJob, createDocImportJob, getDocImportJob, updateDocImportJob, confirmDocImport } = require("./utils/ddb");
 const { deleteDocument, storeDocument } = require("./utils/documentStorage");
+const { enqueueDocumentImport } = require("./utils/documentQueue");
 const { validateNewTransaction, calculatePortfolioState, validateTransactionsState } = require("./utils/transactions");
-const { processDocumentImport } = require("@kesahomma26/agents");
 
 
 const app = express();
@@ -564,6 +564,13 @@ app.post("/api/portfolios/:portfolioId/upload", authMiddleware, (req, res, next)
       throw err;
     }
 
+    try {
+      await enqueueDocumentImport({ userId, portfolioId, importId: job.importId });
+    } catch (err) {
+      await updateDocImportJob(userId, portfolioId, job.importId, "FAILED", null, "Unable to queue document import");
+      throw err;
+    }
+
     res.status(201).json({
       status: "success",
       job: {
@@ -608,6 +615,7 @@ app.get("/api/portfolios/:portfolioId/upload/:importId", authMiddleware, async (
         status: job.status,
         type: job.type,
         extractedData: job.extractedData,
+        error: job.error,
         createdAt: job.createdAt
       }
     });
