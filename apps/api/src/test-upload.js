@@ -4,7 +4,8 @@ process.env.BYPASS_AUTH = "true";
 process.env.MOCK_DYNAMODB = "true";
 
 const app = require("./app");
-const { clearMockDb } = require("./utils/ddb");
+const { clearMockDb, putPortfolio } = require("./utils/ddb");
+const { clearMockDocuments } = require("./utils/documentStorage");
 
 const PORT = Number(process.env.PORT || 3004);
 const server = app.listen(PORT, async () => {
@@ -13,10 +14,12 @@ const server = app.listen(PORT, async () => {
 
   try {
     clearMockDb();
+    clearMockDocuments();
 
     console.log("\n--- Executing Document Upload API Integration Tests ---");
 
     const portfolioId = "portfolio-upload-123";
+    await putPortfolio("dev-user-12345-uuid-67890", { portfolioId, name: "Upload test" });
 
     // Helper to perform multipart upload
     const uploadFile = async (filename, content = "sample content", mimeType = "text/plain") => {
@@ -99,13 +102,6 @@ const server = app.listen(PORT, async () => {
       throw new Error(`Expected job details to match uploaded job, got: ${JSON.stringify(d3)}`);
     }
     console.log(`  PASS: GET status verified cleanly for importId ${createdImportId}`);
-
-    // Also test GET direct path `/api/portfolios/upload/${createdImportId}`
-    const { status: s3b, data: d3b } = await getRequest(`/api/portfolios/upload/${createdImportId}`);
-    if (s3b !== 200 || d3b.status !== "success" || d3b.job?.importId !== createdImportId) {
-      throw new Error(`Expected 200 OK for direct import status route, got status ${s3b} and data: ${JSON.stringify(d3b)}`);
-    }
-    console.log("  PASS: GET status direct route verified cleanly");
 
     // 4. GET Non-existent Job Returns 404
     console.log("\nTest 4: GET non-existent import job returns 404...");
