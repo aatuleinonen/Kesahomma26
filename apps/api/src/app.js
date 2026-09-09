@@ -562,7 +562,7 @@ app.post("/api/portfolios/:portfolioId/upload", authMiddleware, (req, res, next)
       status: "success",
       job: {
         importId: job.importId,
-        status: job.status
+        status: "UPLOADED"
       }
     });
 

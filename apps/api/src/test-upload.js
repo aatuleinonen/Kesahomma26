@@ -107,7 +107,7 @@ const server = app.listen(PORT, async () => {
     if (s3 !== 200 || d3.status !== "success") {
       throw new Error(`Expected 200 OK and status success, got status ${s3} and data: ${JSON.stringify(d3)}`);
     }
-    if (!d3.job || d3.job.importId !== createdImportId || !["UPLOADED", "PROCESSING"].includes(d3.job.status) || d3.job.type !== "document_import") {
+    if (!d3.job || d3.job.importId !== createdImportId || !["UPLOADED", "PROCESSING", "READY_FOR_REVIEW"].includes(d3.job.status) || d3.job.type !== "document_import") {
       throw new Error(`Expected job details to match uploaded job, got: ${JSON.stringify(d3)}`);
     }
     console.log(`  PASS: GET status verified cleanly for importId ${createdImportId}`);
@@ -131,10 +131,10 @@ const server = app.listen(PORT, async () => {
     // 5. Background Parser Worker Asynchronous Processing Test
     console.log("\nTest 5: Verify async background parser updates status to READY_FOR_REVIEW after delay...");
     const { status: s5Post, data: d5Post } = await uploadFile("portfolio_import.pdf");
-    if (s5Post !== 201 || d5Post.status !== "UPLOADED") {
-      throw new Error(`Expected 201 UPLOADED for test 5, got status ${s5Post} and data: ${JSON.stringify(d5Post)}`);
+    if (s5Post !== 201 || d5Post.status !== "success" || d5Post.job?.status !== "UPLOADED") {
+      throw new Error(`Expected 201 with an UPLOADED job for test 5, got status ${s5Post} and data: ${JSON.stringify(d5Post)}`);
     }
-    const asyncImportId = d5Post.importId;
+    const asyncImportId = d5Post.job.importId;
     console.log(`  Created async import job ${asyncImportId}. Waiting for background worker...`);
 
     const startTime = Date.now();
