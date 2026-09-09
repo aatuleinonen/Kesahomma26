@@ -1,6 +1,6 @@
 // Processes durable SQS document-import messages outside the API Lambda lifecycle.
 const { processDocumentImport } = require("@kesahomma26/agents");
-const { getDocImportJob, getStaleUploadedDocImports, updateDocImportJob } = require("./utils/ddb");
+const { claimDocImportDispatch, getDocImportJob, getStaleUploadedDocImports, updateDocImportJob } = require("./utils/ddb");
 const { deleteDocument, loadDocument } = require("./utils/documentStorage");
 const { enqueueDocumentImport } = require("./utils/documentQueue");
 
@@ -66,8 +66,13 @@ async function requeueStaleDocumentImports(now = new Date()) {
     : 120;
   const cutoffIso = new Date(now.getTime() - staleAfterSeconds * 1000).toISOString();
   const jobs = await getStaleUploadedDocImports(cutoffIso);
-  for (const job of jobs) await enqueueDocumentImport(job);
-  return jobs.length;
+  let dispatchedJobs = 0;
+  for (const job of jobs) {
+    if (!await claimDocImportDispatch(job, now.toISOString())) continue;
+    await enqueueDocumentImport({ userId: job.userId, portfolioId: job.portfolioId, importId: job.importId });
+    dispatchedJobs += 1;
+  }
+  return dispatchedJobs;
 }
 
 module.exports = { handler, processImportMessage, requeueStaleDocumentImports };
