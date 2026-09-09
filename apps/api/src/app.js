@@ -21,13 +21,6 @@ const configuredUploadLimitBytes = Number.parseInt(process.env.DOCUMENT_UPLOAD_M
 const maxUploadSizeBytes = Number.isSafeInteger(configuredUploadLimitBytes) && configuredUploadLimitBytes > 0
   ? Math.min(configuredUploadLimitBytes, lambdaProxyUploadLimitBytes)
   : lambdaProxyUploadLimitBytes;
-const allowedUploadMimeTypes = {
-  ".pdf": ["application/pdf", "application/octet-stream"],
-  ".csv": ["text/csv", "text/plain", "application/vnd.ms-excel"],
-  ".xlsx": ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/octet-stream"],
-  ".xls": ["application/vnd.ms-excel", "application/octet-stream"]
-};
-
 function normalizeUploadFilename(originalName) {
   return String(originalName || "document")
     .replace(/[\\/\x00-\x1F]/g, "_")
@@ -41,13 +34,12 @@ const upload = multer({
     files: 1
   },
   fileFilter: (req, file, cb) => {
-    const allowedExtensions = [".pdf", ".xlsx", ".xls", ".csv"];
     const ext = path.extname(file.originalname || "").toLowerCase();
-    const mimeType = (file.mimetype || "").toLowerCase();
-    if (allowedExtensions.includes(ext) && allowedUploadMimeTypes[ext].includes(mimeType)) {
+    const allowedCsvMimeTypes = ["text/csv", "application/csv", "text/plain", "application/vnd.ms-excel", "application/octet-stream"];
+    if (ext === ".csv" && allowedCsvMimeTypes.includes((file.mimetype || "").toLowerCase())) {
       cb(null, true);
     } else {
-      const err = new Error("Invalid file type. Only supported PDF, CSV, XLSX, and XLS documents are accepted.");
+      const err = new Error("Invalid file type. Only UTF-8 CSV documents are supported.");
       err.code = "INVALID_FILE_TYPE";
       cb(err);
     }
