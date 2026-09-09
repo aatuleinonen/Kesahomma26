@@ -573,7 +573,11 @@ app.post("/api/portfolios/:portfolioId/upload", authMiddleware, (req, res, next)
     try {
       await enqueueDocumentImport({ userId, portfolioId, importId: job.importId });
     } catch (err) {
-      await updateDocImportJob(userId, portfolioId, job.importId, "FAILED", null, "Unable to queue document import");
+      try {
+        await updateDocImportJob(userId, portfolioId, job.importId, "FAILED", null, "Unable to queue document import");
+      } finally {
+        await deleteDocument(sourceDocument);
+      }
       throw err;
     }
 

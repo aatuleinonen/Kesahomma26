@@ -11,7 +11,7 @@ import {
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3'
-import { UpdateFunctionCodeCommand, LambdaClient } from '@aws-sdk/client-lambda'
+import { UpdateFunctionCodeCommand, LambdaClient, waitUntilFunctionUpdatedV2 } from '@aws-sdk/client-lambda'
 import { CloudFrontClient, CreateInvalidationCommand } from '@aws-sdk/client-cloudfront'
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -222,16 +222,18 @@ async function main() {
   const cloudFront = new CloudFrontClient({ region: 'us-east-1' })
   await lambda.send(
     new UpdateFunctionCodeCommand({
-      FunctionName: lambdaFunction,
-      ZipFile: await readFile(apiArchive),
-    }),
-  )
-  await lambda.send(
-    new UpdateFunctionCodeCommand({
       FunctionName: documentWorkerFunction,
       ZipFile: await readFile(documentWorkerArchive),
     }),
   )
+  await waitUntilFunctionUpdatedV2({ client: lambda, maxWaitTime: 120 }, { FunctionName: documentWorkerFunction })
+  await lambda.send(
+    new UpdateFunctionCodeCommand({
+      FunctionName: lambdaFunction,
+      ZipFile: await readFile(apiArchive),
+    }),
+  )
+  await waitUntilFunctionUpdatedV2({ client: lambda, maxWaitTime: 120 }, { FunctionName: lambdaFunction })
   await syncFrontend(s3, frontendBucket, join(repositoryRoot, 'apps', 'frontend', 'dist'))
   await cloudFront.send(
     new CreateInvalidationCommand({

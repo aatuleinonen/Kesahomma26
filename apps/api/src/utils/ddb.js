@@ -664,7 +664,7 @@ async function getDocImportJob(userId, importId, portfolioId) {
  * @param {string} userId - Cognito User ID (sub)
  * @param {string} portfolioId - Portfolio ID
  * @param {string} importId - Import Job ID (UUID)
- * @param {string} status - New job status ("UPLOADED" | "PROCESSING" | "READY_FOR_REVIEW" | "COMPLETED" | "FAILED")
+ * @param {string} status - New job status ("PROCESSING" | "RETRYING" | "READY_FOR_REVIEW" | "FAILED")
  * @param {Array|object|null} extractedData - Extracted holdings payload
  * @param {string|null} error - Error message
  * @returns {Promise<object>} The updated job item attributes.
@@ -672,11 +672,23 @@ async function getDocImportJob(userId, importId, portfolioId) {
 async function updateDocImportJob(userId, portfolioId, importId, status, extractedData = null, error = null) {
   const pk = `USER#${userId}`;
   const sk = `PORTFOLIO#${portfolioId}#DOC_IMPORT#${importId}`;
+  const expectedStatuses = {
+    PROCESSING: ["UPLOADED", "RETRYING"],
+    RETRYING: ["UPLOADED", "RETRYING"],
+    READY_FOR_REVIEW: ["PROCESSING"],
+    FAILED: ["UPLOADED", "PROCESSING"]
+  }[status];
+  if (!expectedStatuses) throw new Error(`Unsupported document import status transition: ${status}`);
 
   if (isMock) {
     const item = mockDb.find(i => i.PK === pk && i.SK === sk);
     if (!item) {
       throw new Error("Document import job not found");
+    }
+    if (!expectedStatuses.includes(item.status)) {
+      const err = new Error(`Cannot transition document import from ${item.status} to ${status}`);
+      err.name = "ConditionalCheckFailedException";
+      throw err;
     }
     item.status = status;
     item.extractedData = extractedData;
@@ -689,6 +701,7 @@ async function updateDocImportJob(userId, portfolioId, importId, status, extract
     throw new Error("DynamoDB client is not initialized");
   }
 
+  const expectedStatusValues = Object.fromEntries(expectedStatuses.map((value, index) => [`:expectedStatus${index}`, value]));
   const response = await ddbDocClient.send(new UpdateCommand({
     TableName: tableName,
     Key: { PK: pk, SK: sk },
@@ -703,9 +716,10 @@ async function updateDocImportJob(userId, portfolioId, importId, status, extract
       ":status": status,
       ":extractedData": extractedData,
       ":error": error,
-      ":updatedAt": new Date().toISOString()
+      ":updatedAt": new Date().toISOString(),
+      ...expectedStatusValues
     },
-    ConditionExpression: "attribute_exists(PK)",
+    ConditionExpression: `attribute_exists(PK) AND #status IN (${Object.keys(expectedStatusValues).join(", ")})`,
     ReturnValues: "ALL_NEW"
   }));
 
