@@ -4,7 +4,7 @@ process.env.BYPASS_AUTH = "true";
 process.env.MOCK_DYNAMODB = "true";
 
 const app = require("./app");
-const { clearMockDb, putPortfolio } = require("./utils/ddb");
+const { clearMockDb, createDocImportJob, markPortfolioDeleting, putPortfolio } = require("./utils/ddb");
 const { clearMockDocuments } = require("./utils/documentStorage");
 
 const PORT = Number(process.env.PORT || 3004);
@@ -111,6 +111,22 @@ const server = app.listen(PORT, async () => {
       throw new Error(`Expected 404 Not Found, got status ${s4} and data: ${JSON.stringify(d4)}`);
     }
     console.log("  PASS: GET non-existent import job returned 404 as expected");
+
+    await markPortfolioDeleting("dev-user-12345-uuid-67890", portfolioId);
+    let blockedCreateError;
+    try {
+      await createDocImportJob("dev-user-12345-uuid-67890", portfolioId, null, "blocked-import");
+    } catch (error) {
+      blockedCreateError = error;
+    }
+    if (blockedCreateError?.name !== "TransactionCanceledException") {
+      throw new Error("Expected the deletion marker to reject new document import jobs");
+    }
+    const blockedUpload = await uploadFile("blocked.csv", "ticker,quantity,costBasis\nAAPL,1,100", "text/csv");
+    if (blockedUpload.status !== 409) {
+      throw new Error(`Expected 409 while portfolio deletion is active, got ${blockedUpload.status}`);
+    }
+    console.log("  PASS: Portfolio deletion marker blocks new imports");
 
     console.log("\n--- All Document Upload API integration tests passed! ---");
   } catch (err) {

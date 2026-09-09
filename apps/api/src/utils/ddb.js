@@ -186,6 +186,34 @@ async function putPortfolio(userId, portfolio) {
   return item;
 }
 
+/** Marks a portfolio as deleting so transactional child creation can no longer succeed. */
+async function markPortfolioDeleting(userId, portfolioId) {
+  const pk = `USER#${userId}`;
+  const sk = `METADATA#PORTFOLIO#${portfolioId}`;
+  const portfolio = await getPortfolio(userId, portfolioId);
+  if (!portfolio || portfolio.deletionStatus === "DELETING") return portfolio;
+  const deletionStartedAt = new Date().toISOString();
+
+  if (isMock) {
+    portfolio.deletionStatus = "DELETING";
+    portfolio.deletionStartedAt = deletionStartedAt;
+    return portfolio;
+  }
+  const response = await ddbDocClient.send(new UpdateCommand({
+    TableName: tableName,
+    Key: { PK: pk, SK: sk },
+    UpdateExpression: "SET #deletionStatus = :deleting, #deletionStartedAt = :startedAt",
+    ExpressionAttributeNames: {
+      "#deletionStatus": "deletionStatus",
+      "#deletionStartedAt": "deletionStartedAt"
+    },
+    ExpressionAttributeValues: { ":deleting": "DELETING", ":startedAt": deletionStartedAt },
+    ConditionExpression: "attribute_exists(PK) AND attribute_not_exists(#deletionStatus)",
+    ReturnValues: "ALL_NEW"
+  }));
+  return response.Attributes;
+}
+
 /**
  * Deletes a portfolio metadata item and every record scoped to that portfolio.
  *
@@ -224,7 +252,8 @@ async function deletePortfolio(userId, portfolioId) {
       ":pk": pk,
       ":metadataSk": metadataSk
     },
-    ProjectionExpression: "PK, SK"
+    ProjectionExpression: "PK, SK",
+    ConsistentRead: true
   }));
   const metadata = metadataResponse.Items?.[0];
   if (!metadata) {
@@ -242,6 +271,7 @@ async function deletePortfolio(userId, portfolioId) {
         ":recordPrefix": recordPrefix
       },
       ProjectionExpression: "PK, SK",
+      ConsistentRead: true,
       ExclusiveStartKey: exclusiveStartKey
     }));
     records.push(...(response.Items || []));
@@ -541,6 +571,17 @@ async function createDocImportJob(userId, portfolioId, sourceDocument = null, im
   };
 
   if (isMock) {
+    const portfolio = mockDb.find(candidate => candidate.PK === pk && candidate.SK === `METADATA#PORTFOLIO#${portfolioId}`);
+    if (!portfolio || portfolio.deletionStatus === "DELETING") {
+      const err = new Error("Portfolio is unavailable for document imports");
+      err.name = "TransactionCanceledException";
+      throw err;
+    }
+    if (mockDb.some(candidate => candidate.PK === pk && candidate.SK === sk)) {
+      const err = new Error("Document import job already exists");
+      err.name = "TransactionCanceledException";
+      throw err;
+    }
     mockDb.push(item);
     return item;
   }
@@ -549,10 +590,25 @@ async function createDocImportJob(userId, portfolioId, sourceDocument = null, im
     throw new Error("DynamoDB client is not initialized");
   }
 
-  await ddbDocClient.send(new PutCommand({
-    TableName: tableName,
-    Item: item,
-    ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)"
+  await ddbDocClient.send(new TransactWriteCommand({
+    TransactItems: [
+      {
+        ConditionCheck: {
+          TableName: tableName,
+          Key: { PK: pk, SK: `METADATA#PORTFOLIO#${portfolioId}` },
+          ConditionExpression: "attribute_exists(PK) AND (attribute_not_exists(#deletionStatus) OR #deletionStatus <> :deleting)",
+          ExpressionAttributeNames: { "#deletionStatus": "deletionStatus" },
+          ExpressionAttributeValues: { ":deleting": "DELETING" }
+        }
+      },
+      {
+        Put: {
+          TableName: tableName,
+          Item: item,
+          ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)"
+        }
+      }
+    ]
   }));
 
   return item;
@@ -621,6 +677,7 @@ async function getPortfolioDocumentSources(userId, portfolioId) {
       KeyConditionExpression: "PK = :pk AND begins_with(SK, :skPrefix)",
       ExpressionAttributeValues: { ":pk": pk, ":skPrefix": skPrefix },
       ProjectionExpression: "sourceDocument",
+      ConsistentRead: true,
       ExclusiveStartKey: exclusiveStartKey
     }));
     sourceDocuments.push(...(response.Items || []).map(item => item.sourceDocument).filter(Boolean));
@@ -635,6 +692,7 @@ module.exports = {
   getPortfolios,
   getPortfolio,
   putPortfolio,
+  markPortfolioDeleting,
   deletePortfolio,
   deleteTransaction,
   updateTransaction,

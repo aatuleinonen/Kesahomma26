@@ -1,6 +1,6 @@
 // Stores uploaded import documents durably in S3, with an in-memory implementation for tests.
 const crypto = require("crypto");
-const { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } = require("@aws-sdk/client-s3");
+const { DeleteObjectCommand, PutObjectCommand, S3Client } = require("@aws-sdk/client-s3");
 
 const isMock = process.env.MOCK_DYNAMODB === "true" || process.env.NODE_ENV === "test";
 const bucketName = process.env.DOCUMENT_IMPORT_BUCKET;
@@ -42,20 +42,6 @@ async function storeDocument(userId, portfolioId, importId, file) {
   return sourceDocument;
 }
 
-async function loadDocument(sourceDocument) {
-  if (isMock) {
-    const body = mockDocuments.get(sourceDocument.key);
-    if (!body) throw new Error("Uploaded document is not available");
-    return Buffer.from(body);
-  }
-
-  const response = await s3Client.send(new GetObjectCommand({
-    Bucket: sourceDocument.bucket,
-    Key: sourceDocument.key
-  }));
-  return Buffer.from(await response.Body.transformToByteArray());
-}
-
 async function deleteDocument(sourceDocument) {
   if (isMock) {
     mockDocuments.delete(sourceDocument.key);
@@ -71,4 +57,9 @@ function clearMockDocuments() {
   mockDocuments.clear();
 }
 
-module.exports = { storeDocument, loadDocument, deleteDocument, clearMockDocuments };
+function hasMockDocument(sourceDocument) {
+  if (!isMock) throw new Error("Mock document inspection is only available in tests");
+  return mockDocuments.has(sourceDocument.key);
+}
+
+module.exports = { storeDocument, deleteDocument, clearMockDocuments, hasMockDocument };

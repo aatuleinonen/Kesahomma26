@@ -6,7 +6,7 @@ const multer = require("multer");
 const { authMiddleware } = require("./middleware/auth");
 const { auditMiddleware, logEvent } = require("./utils/logger");
 const { getUserId, buildIsolatedQueryParams } = require("./utils/db");
-const { putTransaction, getTransactions, getPortfolios, getPortfolio, getPortfolioDocumentSources, putPortfolio, deletePortfolio, deleteTransaction, updateTransaction, createAnalysisJob, getAnalysisJob, updateAnalysisJob, createDocImportJob, getDocImportJob } = require("./utils/ddb");
+const { putTransaction, getTransactions, getPortfolios, getPortfolio, getPortfolioDocumentSources, markPortfolioDeleting, putPortfolio, deletePortfolio, deleteTransaction, updateTransaction, createAnalysisJob, getAnalysisJob, updateAnalysisJob, createDocImportJob, getDocImportJob } = require("./utils/ddb");
 const { deleteDocument, storeDocument } = require("./utils/documentStorage");
 const { validateNewTransaction, calculatePortfolioState, validateTransactionsState } = require("./utils/transactions");
 
@@ -294,6 +294,10 @@ app.delete("/api/portfolios/:portfolioId", authMiddleware, async (req, res) => {
   try {
     const userId = getUserId(req);
     const { portfolioId } = req.params;
+    const portfolio = await markPortfolioDeleting(userId, portfolioId);
+    if (!portfolio) {
+      return res.status(404).json({ status: "error", message: "Portfolio not found" });
+    }
     const sourceDocuments = await getPortfolioDocumentSources(userId, portfolioId);
     await Promise.all(sourceDocuments.map(deleteDocument));
     const result = await deletePortfolio(userId, portfolioId);
@@ -542,8 +546,12 @@ app.post("/api/portfolios/:portfolioId/upload", authMiddleware, (req, res, next)
     const userId = getUserId(req);
     const { portfolioId } = req.params;
 
-    if (!await getPortfolio(userId, portfolioId)) {
+    const portfolio = await getPortfolio(userId, portfolioId);
+    if (!portfolio) {
       return res.status(404).json({ status: "error", message: "Portfolio not found" });
+    }
+    if (portfolio.deletionStatus === "DELETING") {
+      return res.status(409).json({ status: "error", message: "Portfolio is being deleted" });
     }
 
     const importId = crypto.randomUUID();
@@ -569,8 +577,8 @@ app.post("/api/portfolios/:portfolioId/upload", authMiddleware, (req, res, next)
       }
     });
   } catch (err) {
-    if (err?.name === "ConditionalCheckFailedException") {
-      return res.status(409).json({ status: "error", message: "Document import job already exists" });
+    if (err?.name === "ConditionalCheckFailedException" || err?.name === "TransactionCanceledException") {
+      return res.status(409).json({ status: "error", message: "Portfolio is unavailable or the document import already exists" });
     }
     const statusCode =
       typeof err?.message === "string" && err.message.startsWith("Unauthorized") ? 401 : 500;
