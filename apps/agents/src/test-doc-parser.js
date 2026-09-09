@@ -12,6 +12,35 @@ async function expectRejected(run, message) {
 }
 
 async function main() {
+  const successfulCases = [
+    {
+      content: "ticker,quantity,costBasis\nAAPL,2,300",
+      expected: [{ ticker: "AAPL", quantity: 2, costBasis: 300 }]
+    },
+    {
+      content: "symbol,quantity,cost_basis\nVOO,5,2000",
+      expected: [{ ticker: "VOO", quantity: 5, costBasis: 2000 }]
+    }
+  ];
+  for (const [index, testCase] of successfulCases.entries()) {
+    let extracted;
+    const status = await processDocumentImport("user", "portfolio", `mapping-${index}`, document(testCase.content), async (nextStatus, data) => {
+      if (nextStatus === "READY_FOR_REVIEW") extracted = data;
+    });
+    assert.equal(status, "READY_FOR_REVIEW");
+    assert.deepEqual(extracted, testCase.expected);
+  }
+
+  let encodingFailure;
+  const invalidUtf8Status = await processDocumentImport("user", "portfolio", "invalid-utf8", {
+    buffer: Buffer.from([0xff, 0xfe, 0xfd]),
+    metadata: { originalName: "holdings.csv", mimeType: "text/csv" }
+  }, async (status, data, error) => {
+    if (status === "FAILED") encodingFailure = error;
+  });
+  assert.equal(invalidUtf8Status, "FAILED");
+  assert.match(encodingFailure, /valid UTF-8/);
+
   await expectRejected(
     () => processDocumentImport("user", "portfolio", "processing-write", document("ticker,quantity,costBasis\nAAPL,1,100"), async status => {
       if (status === "PROCESSING") throw new Error("processing persistence failed");

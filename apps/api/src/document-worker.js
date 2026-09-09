@@ -6,7 +6,7 @@ const { deleteDocument, loadDocument } = require("./utils/documentStorage");
 async function processImportMessage({ userId, portfolioId, importId }) {
   const job = await getDocImportJob(userId, importId, portfolioId);
   if (!job) return;
-  if (["READY_FOR_REVIEW", "COMPLETED"].includes(job.status)) {
+  if (["FAILED", "READY_FOR_REVIEW", "COMPLETED"].includes(job.status)) {
     if (job.sourceDocument) await deleteDocument(job.sourceDocument);
     return;
   }
@@ -15,7 +15,7 @@ async function processImportMessage({ userId, portfolioId, importId }) {
   try {
     buffer = await loadDocument(job.sourceDocument);
   } catch (error) {
-    await updateDocImportJob(userId, portfolioId, importId, "FAILED", null, "Uploaded document could not be read; processing will be retried");
+    await updateDocImportJob(userId, portfolioId, importId, "RETRYING", null, "Uploaded document could not be read; processing will be retried");
     throw error;
   }
 

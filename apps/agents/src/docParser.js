@@ -28,7 +28,13 @@ async function processDocumentImport(userId, portfolioId, importId, document, up
       throw new Error("This document format is not yet supported for extraction; upload a UTF-8 CSV file");
     }
 
-    const rows = parse(document.buffer, {
+    let csvText;
+    try {
+      csvText = new TextDecoder("utf-8", { fatal: true }).decode(document.buffer);
+    } catch {
+      throw new Error("CSV must contain valid UTF-8 text");
+    }
+    const rows = parse(csvText, {
       bom: true,
       columns: headers => headers.map(value => value.trim().toLowerCase()),
       skip_empty_lines: true,
