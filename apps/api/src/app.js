@@ -301,14 +301,14 @@ app.delete("/api/portfolios/:portfolioId", authMiddleware, async (req, res) => {
       return res.status(404).json({ status: "error", message: "Portfolio not found" });
     }
     const sourceDocuments = await getPortfolioDocumentSources(userId, portfolioId);
-    await Promise.all(sourceDocuments.map(deleteDocument));
+    const cleanupBatchSize = 5;
+    for (let index = 0; index < sourceDocuments.length; index += cleanupBatchSize) {
+      await Promise.all(sourceDocuments.slice(index, index + cleanupBatchSize).map(deleteDocument));
+    }
     const result = await deletePortfolio(userId, portfolioId);
 
     if (!result) {
-      return res.status(404).json({
-        status: "error",
-        message: "Portfolio not found"
-      });
+      return res.status(204).send();
     }
 
     return res.status(204).send();
@@ -567,7 +567,16 @@ app.post("/api/portfolios/:portfolioId/upload", authMiddleware, (req, res, next)
     try {
       job = await createDocImportJob(userId, portfolioId, sourceDocument, importId);
     } catch (err) {
-      await deleteDocument(sourceDocument).catch(() => {});
+      try {
+        await deleteDocument(sourceDocument);
+      } catch (cleanupError) {
+        logEvent("error", "document_cleanup_failed", {
+          requestId: req.requestId,
+          importId,
+          errorName: cleanupError?.name || "Error"
+        });
+        throw cleanupError;
+      }
       throw err;
     }
 
