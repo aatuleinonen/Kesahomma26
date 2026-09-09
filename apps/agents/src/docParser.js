@@ -1,14 +1,24 @@
+const crypto = require("crypto");
+
 /**
  * Simulates processing of an AI document import job in the background.
  * 
  * @param {string} userId - Cognito User ID (sub)
  * @param {string} portfolioId - Portfolio ID
  * @param {string} importId - Document Import Job ID (UUID)
+ * @param {{buffer: Buffer, metadata: object}} document - Uploaded document bytes and metadata.
  * @param {function} updateJobStatus - Injected callback function to persist job status changes
  */
-async function processDocumentImport(userId, portfolioId, importId, updateJobStatus) {
+async function processDocumentImport(userId, portfolioId, importId, document, updateJobStatus) {
   console.log(`[DocParser] Picked up document import job ${importId} for user ${userId} and portfolio ${portfolioId}`);
   try {
+    if (!Buffer.isBuffer(document?.buffer)) {
+      throw new Error("Document import is missing uploaded file bytes");
+    }
+
+    const checksum = crypto.createHash("sha256").update(document.buffer).digest("hex");
+    console.log(`[DocParser] Processing ${document.metadata?.originalName || "uploaded document"} (${document.buffer.length} bytes, sha256 ${checksum})`);
+
     // Simulate network/LLM extraction delay
     await new Promise(resolve => setTimeout(resolve, 3000));
 

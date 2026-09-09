@@ -532,7 +532,13 @@ app.post("/api/portfolios/:portfolioId/upload", authMiddleware, (req, res, next)
     });
 
     // Call the background document parser worker (fire-and-forget)
-    processDocumentImport(userId, portfolioId, job.importId, (status, data, err) => updateDocImportJob(userId, portfolioId, job.importId, status, data, err)).catch(console.error);
+    processDocumentImport(
+      userId,
+      portfolioId,
+      job.importId,
+      { buffer: req.file.buffer, metadata: job.sourceDocument },
+      (status, data, err) => updateDocImportJob(userId, portfolioId, job.importId, status, data, err)
+    ).catch(console.error);
 
     res.status(201).json({
       importId: job.importId,
