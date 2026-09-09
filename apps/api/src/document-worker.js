@@ -1,7 +1,8 @@
 // Processes durable SQS document-import messages outside the API Lambda lifecycle.
 const { processDocumentImport } = require("@kesahomma26/agents");
-const { getDocImportJob, updateDocImportJob } = require("./utils/ddb");
+const { getDocImportJob, getStaleUploadedDocImports, updateDocImportJob } = require("./utils/ddb");
 const { deleteDocument, loadDocument } = require("./utils/documentStorage");
+const { enqueueDocumentImport } = require("./utils/documentQueue");
 
 async function processImportMessage({ userId, portfolioId, importId }, { finalAttempt = false } = {}) {
   const job = await getDocImportJob(userId, importId, portfolioId);
@@ -37,6 +38,10 @@ async function processImportMessage({ userId, portfolioId, importId }, { finalAt
 }
 
 async function handler(event) {
+  if (event?.source === "aws.events") {
+    await requeueStaleDocumentImports();
+    return { batchItemFailures: [] };
+  }
   const batchItemFailures = [];
   const configuredMaxReceiveCount = Number.parseInt(process.env.DOCUMENT_IMPORT_MAX_RECEIVE_COUNT, 10);
   const maxReceiveCount = Number.isSafeInteger(configuredMaxReceiveCount) && configuredMaxReceiveCount > 0
@@ -54,4 +59,15 @@ async function handler(event) {
   return { batchItemFailures };
 }
 
-module.exports = { handler, processImportMessage };
+async function requeueStaleDocumentImports(now = new Date()) {
+  const configuredAgeSeconds = Number.parseInt(process.env.DOCUMENT_IMPORT_STALE_AFTER_SECONDS, 10);
+  const staleAfterSeconds = Number.isSafeInteger(configuredAgeSeconds) && configuredAgeSeconds > 0
+    ? configuredAgeSeconds
+    : 120;
+  const cutoffIso = new Date(now.getTime() - staleAfterSeconds * 1000).toISOString();
+  const jobs = await getStaleUploadedDocImports(cutoffIso);
+  for (const job of jobs) await enqueueDocumentImport(job);
+  return jobs.length;
+}
+
+module.exports = { handler, processImportMessage, requeueStaleDocumentImports };

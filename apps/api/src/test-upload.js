@@ -6,7 +6,7 @@ process.env.MOCK_DYNAMODB = "true";
 const app = require("./app");
 const { clearMockDb, createDocImportJob, getDocImportJob, markPortfolioDeleting, putPortfolio, updateDocImportJob } = require("./utils/ddb");
 const { clearMockDocuments, getMockDocumentCount, loadDocument, storeDocument } = require("./utils/documentStorage");
-const { handler: documentWorkerHandler, processImportMessage } = require("./document-worker");
+const { handler: documentWorkerHandler, processImportMessage, requeueStaleDocumentImports } = require("./document-worker");
 
 const PORT = Number(process.env.PORT || 3004);
 const server = app.listen(PORT, async () => {
@@ -313,6 +313,20 @@ const server = app.listen(PORT, async () => {
       throw new Error(`Expected a redelivered PROCESSING job to resume, got ${resumedJob.status}`);
     }
     console.log("  PASS: A redelivered PROCESSING job resumes idempotently");
+
+    const undispatchedSource = await storeDocument("dev-user-12345-uuid-67890", portfolioId, "undispatched-import", {
+      originalName: "undispatched.csv",
+      mimeType: "text/csv",
+      buffer: Buffer.from("ticker,quantity,costBasis\nNVDA,1,100")
+    });
+    const undispatchedImport = await createDocImportJob("dev-user-12345-uuid-67890", portfolioId, undispatchedSource, "undispatched-import");
+    await requeueStaleDocumentImports(new Date(Date.now() + 5 * 60 * 1000));
+    await new Promise(resolve => setTimeout(resolve, 10));
+    const reconciledJob = await getDocImportJob("dev-user-12345-uuid-67890", undispatchedImport.importId, portfolioId);
+    if (reconciledJob.status !== "READY_FOR_REVIEW") {
+      throw new Error(`Expected reconciliation to dispatch a stale UPLOADED job, got ${reconciledJob.status}`);
+    }
+    console.log("  PASS: Reconciliation dispatches stale UPLOADED jobs");
 
     const deletingImport = await createDocImportJob("dev-user-12345-uuid-67890", portfolioId);
     await updateDocImportJob("dev-user-12345-uuid-67890", portfolioId, deletingImport.importId, "PROCESSING", null, null);

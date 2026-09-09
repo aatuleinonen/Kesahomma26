@@ -260,12 +260,18 @@ resource "aws_iam_role_policy" "document_worker" {
       },
       {
         Effect   = "Allow"
-        Action   = ["dynamodb:GetItem", "dynamodb:UpdateItem"]
+        Action   = ["dynamodb:GetItem", "dynamodb:Scan", "dynamodb:UpdateItem"]
         Resource = aws_dynamodb_table.single_table.arn
       },
       {
-        Effect   = "Allow"
-        Action   = ["sqs:ChangeMessageVisibility", "sqs:DeleteMessage", "sqs:GetQueueAttributes", "sqs:ReceiveMessage"]
+        Effect = "Allow"
+        Action = [
+          "sqs:ChangeMessageVisibility",
+          "sqs:DeleteMessage",
+          "sqs:GetQueueAttributes",
+          "sqs:ReceiveMessage",
+          "sqs:SendMessage"
+        ]
         Resource = aws_sqs_queue.document_imports.arn
       }
     ]
@@ -291,10 +297,12 @@ resource "aws_lambda_function" "document_worker" {
 
   environment {
     variables = {
-      DYNAMODB_TABLE_NAME               = aws_dynamodb_table.single_table.name
-      DOCUMENT_IMPORT_BUCKET            = aws_s3_bucket.document_imports.id
-      DOCUMENT_IMPORT_MAX_RECEIVE_COUNT = tostring(local.document_import_max_receive_count)
-      NODE_ENV                          = "production"
+      DYNAMODB_TABLE_NAME                 = aws_dynamodb_table.single_table.name
+      DOCUMENT_IMPORT_BUCKET              = aws_s3_bucket.document_imports.id
+      DOCUMENT_IMPORT_MAX_RECEIVE_COUNT   = tostring(local.document_import_max_receive_count)
+      DOCUMENT_IMPORT_QUEUE_URL           = aws_sqs_queue.document_imports.url
+      DOCUMENT_IMPORT_STALE_AFTER_SECONDS = "120"
+      NODE_ENV                            = "production"
     }
   }
 
@@ -310,6 +318,25 @@ resource "aws_lambda_event_source_mapping" "document_imports" {
   function_name           = aws_lambda_function.document_worker.arn
   batch_size              = 1
   function_response_types = ["ReportBatchItemFailures"]
+}
+
+resource "aws_cloudwatch_event_rule" "document_import_reconciliation" {
+  name                = "${local.resource_prefix}-document-import-reconciliation"
+  description         = "Requeues document imports left UPLOADED by interrupted API dispatches"
+  schedule_expression = "rate(1 minute)"
+}
+
+resource "aws_cloudwatch_event_target" "document_import_reconciliation" {
+  rule = aws_cloudwatch_event_rule.document_import_reconciliation.name
+  arn  = aws_lambda_function.document_worker.arn
+}
+
+resource "aws_lambda_permission" "document_import_reconciliation" {
+  statement_id  = "AllowDocumentImportReconciliation"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.document_worker.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.document_import_reconciliation.arn
 }
 
 resource "aws_apigatewayv2_api" "poc" {
