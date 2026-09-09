@@ -694,6 +694,16 @@ app.post("/api/portfolios/:portfolioId/upload/:importId/confirm", authMiddleware
     });
   } catch (err) {
     const cancellationReasons = err?.CancellationReasons || err?.cancellationReasons;
+    const portfolioConditionFailed = err?.code === "PORTFOLIO_UNAVAILABLE"
+      || (err?.name === "TransactionCanceledException"
+        && Array.isArray(cancellationReasons)
+        && cancellationReasons[0]?.Code === "ConditionalCheckFailed");
+    if (portfolioConditionFailed) {
+      return res.status(409).json({
+        status: "error",
+        message: "Portfolio is unavailable for import confirmation"
+      });
+    }
     const jobStatusConditionFailed = err?.code === "IMPORT_NOT_READY"
       || (err?.name === "TransactionCanceledException"
         && Array.isArray(cancellationReasons)

@@ -83,6 +83,10 @@ function validateNewTransaction(newTxn, existingTxns) {
   const type = (newTxn.type || "").toLowerCase();
   const ticker = newTxn.ticker;
   const quantity = parseFloat(newTxn.quantity) || 0;
+  const hasTransferPrice = newTxn.price !== null
+    && newTxn.price !== undefined
+    && String(newTxn.price).trim() !== ""
+    && Number.isFinite(Number(newTxn.price));
   const price = parseFloat(newTxn.price) || 0;
   
   let amount = parseFloat(newTxn.amount);
@@ -117,6 +121,12 @@ function validateNewTransaction(newTxn, existingTxns) {
       return {
         valid: false,
         error: "Quantity must be greater than 0"
+      };
+    }
+    if (type === "transfer_in" && !hasTransferPrice) {
+      return {
+        valid: false,
+        error: "Price is required and must be a finite number for type 'transfer_in'"
       };
     }
     if (type === "transfer_in" ? price < 0 : price <= 0) {

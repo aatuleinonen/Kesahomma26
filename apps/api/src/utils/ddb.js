@@ -735,7 +735,8 @@ async function updateDocImportJob(userId, portfolioId, importId, status, extract
 
 /**
  * Atomically saves extracted holdings as portfolio transactions and completes an import job.
- * DynamoDB transactions support at most 100 operations, leaving room for 99 holdings and the job update.
+ * DynamoDB transactions support at most 100 operations, leaving room for 98 holdings,
+ * the portfolio condition check, and the job update.
  */
 async function confirmDocImport(userId, job) {
   const holdings = new Map();
@@ -761,7 +762,7 @@ async function confirmDocImport(userId, job) {
     err.code = "INVALID_IMPORT_ASSETS";
     throw err;
   }
-  if (holdings.size > 99) {
+  if (holdings.size > 98) {
     const err = new Error("Document import contains too many assets to confirm atomically");
     err.code = "TOO_MANY_IMPORT_ASSETS";
     throw err;
@@ -789,6 +790,13 @@ async function confirmDocImport(userId, job) {
   });
 
   if (isMock) {
+    const portfolioItem = mockDb.find(item => item.PK === pk && item.SK === `METADATA#PORTFOLIO#${job.portfolioId}`);
+    if (!portfolioItem || portfolioItem.deletionStatus === "DELETING") {
+      const err = new Error("Portfolio is unavailable for import confirmation");
+      err.name = "TransactionCanceledException";
+      err.code = "PORTFOLIO_UNAVAILABLE";
+      throw err;
+    }
     const jobItem = mockDb.find(item => item.PK === pk && item.SK === job.SK);
     if (!jobItem || jobItem.status !== "READY_FOR_REVIEW") {
       const err = new Error("Document import is no longer ready for confirmation");
@@ -816,6 +824,15 @@ async function confirmDocImport(userId, job) {
 
   await ddbDocClient.send(new TransactWriteCommand({
     TransactItems: [
+      {
+        ConditionCheck: {
+          TableName: tableName,
+          Key: { PK: pk, SK: `METADATA#PORTFOLIO#${job.portfolioId}` },
+          ExpressionAttributeNames: { "#deletionStatus": "deletionStatus" },
+          ExpressionAttributeValues: { ":deleting": "DELETING" },
+          ConditionExpression: "attribute_exists(PK) AND (attribute_not_exists(#deletionStatus) OR #deletionStatus <> :deleting)"
+        }
+      },
       ...transactionItems.map(Item => ({
         Put: {
           TableName: tableName,

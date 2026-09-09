@@ -5,7 +5,7 @@ process.env.MOCK_DYNAMODB = "true";
 
 const app = require("./app");
 const { clearMockDb, createDocImportJob, getDocImportJob, markPortfolioDeleting, putPortfolio, updateDocImportJob } = require("./utils/ddb");
-const { clearMockDocuments, loadDocument } = require("./utils/documentStorage");
+const { clearMockDocuments, loadDocument, storeDocument } = require("./utils/documentStorage");
 const { handler: documentWorkerHandler, processImportMessage } = require("./document-worker");
 
 const PORT = Number(process.env.PORT || 3004);
@@ -299,7 +299,37 @@ const server = app.listen(PORT, async () => {
       throw new Error(`Expected the final read attempt to become terminal, got: ${JSON.stringify(finalAttemptJob)}`);
     }
     console.log("  PASS: Final SQS read failure becomes terminal instead of stalling in RETRYING");
+
+    const resumedSource = await storeDocument("dev-user-12345-uuid-67890", portfolioId, "resumed-processing", {
+      originalName: "resumed.csv",
+      mimeType: "text/csv",
+      buffer: Buffer.from("ticker,quantity,costBasis\nMSFT,1,100")
+    });
+    const resumedImport = await createDocImportJob("dev-user-12345-uuid-67890", portfolioId, resumedSource, "resumed-processing");
+    await updateDocImportJob("dev-user-12345-uuid-67890", portfolioId, resumedImport.importId, "PROCESSING", null, null);
+    await processImportMessage({ userId: "dev-user-12345-uuid-67890", portfolioId, importId: resumedImport.importId });
+    const resumedJob = await getDocImportJob("dev-user-12345-uuid-67890", resumedImport.importId, portfolioId);
+    if (resumedJob.status !== "READY_FOR_REVIEW") {
+      throw new Error(`Expected a redelivered PROCESSING job to resume, got ${resumedJob.status}`);
+    }
+    console.log("  PASS: A redelivered PROCESSING job resumes idempotently");
+
+    const deletingImport = await createDocImportJob("dev-user-12345-uuid-67890", portfolioId);
+    await updateDocImportJob("dev-user-12345-uuid-67890", portfolioId, deletingImport.importId, "PROCESSING", null, null);
+    await updateDocImportJob("dev-user-12345-uuid-67890", portfolioId, deletingImport.importId, "READY_FOR_REVIEW", [
+      { ticker: "RACE", quantity: 1, costBasis: 10 }
+    ], null);
     await markPortfolioDeleting("dev-user-12345-uuid-67890", portfolioId);
+    const deletingConfirm = await fetch(`http://localhost:${PORT}/api/portfolios/${portfolioId}/upload/${deletingImport.importId}/confirm`, {
+      method: "POST",
+      headers: { "Authorization": "Bearer dummy-token" }
+    });
+    const { data: holdingsAfterDeletingConfirm } = await getRequest(`/api/portfolios/${portfolioId}/holdings`);
+    if (deletingConfirm.status !== 409 || holdingsAfterDeletingConfirm.holdings?.RACE) {
+      throw new Error("Expected portfolio deletion to prevent a racing import confirmation");
+    }
+    console.log("  PASS: Portfolio deletion marker blocks import confirmation atomically");
+
     let blockedCreateError;
     try {
       await createDocImportJob("dev-user-12345-uuid-67890", portfolioId, null, "blocked-import");

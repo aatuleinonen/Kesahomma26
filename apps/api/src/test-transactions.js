@@ -241,7 +241,19 @@ const server = app.listen(PORT, async () => {
     }
     console.log("  PASS: Backdated withdrawal rejected");
 
-    console.log("Test 21: Create a zero-cost transfer-in without changing cash...");
+    console.log("Test 21: Reject a transfer-in without a finite price...");
+    const { status: invalidTransferStatus, data: invalidTransferData } = await apiRequest("/api/portfolios/portfolio-1/transactions", "POST", {
+      type: "transfer_in",
+      ticker: "VOO",
+      quantity: 2,
+      price: "not-a-number"
+    });
+    if (invalidTransferStatus !== 400 || !invalidTransferData.message.includes("finite number")) {
+      throw new Error(`Expected invalid transfer-in price to return 400, got: ${JSON.stringify(invalidTransferData)}`);
+    }
+    console.log("  PASS: Missing or nonnumeric transfer-in price rejected cleanly");
+
+    console.log("Test 22: Create a zero-cost transfer-in without changing cash...");
     const { status: s21, data: d21 } = await apiRequest("/api/portfolios/portfolio-1/transactions", "POST", {
       type: "transfer_in",
       ticker: "VOO",
@@ -259,7 +271,7 @@ const server = app.listen(PORT, async () => {
     }
     console.log("  PASS: Transfer-in accepted and holdings updated without a cash movement");
 
-    console.log("Test 22: Edit a transfer-in transaction...");
+    console.log("Test 23: Edit a transfer-in transaction...");
     const { status: s22, data: d22 } = await apiRequest(
       `/api/portfolios/portfolio-1/transactions/${encodeURIComponent(d21.transaction.timestamp)}`,
       "PUT",
