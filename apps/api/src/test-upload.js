@@ -4,9 +4,9 @@ process.env.BYPASS_AUTH = "true";
 process.env.MOCK_DYNAMODB = "true";
 
 const app = require("./app");
-const { clearMockDb, createDocImportJob, getDocImportJob, markPortfolioDeleting, putPortfolio } = require("./utils/ddb");
-const { clearMockDocuments, loadDocument } = require("./utils/documentStorage");
-const { handler: documentWorkerHandler } = require("./document-worker");
+const { clearMockDb, createDocImportJob, getDocImportJob, markPortfolioDeleting, putPortfolio, updateDocImportJob } = require("./utils/ddb");
+const { clearMockDocuments, loadDocument, storeDocument } = require("./utils/documentStorage");
+const { handler: documentWorkerHandler, processImportMessage } = require("./document-worker");
 
 const PORT = Number(process.env.PORT || 3004);
 const server = app.listen(PORT, async () => {
@@ -205,6 +205,20 @@ const server = app.listen(PORT, async () => {
       throw new Error(`Expected the final read attempt to become terminal, got: ${JSON.stringify(finalAttemptJob)}`);
     }
     console.log("  PASS: Final SQS read failure becomes terminal instead of stalling in RETRYING");
+
+    const resumedSource = await storeDocument("dev-user-12345-uuid-67890", portfolioId, "resumed-processing", {
+      originalName: "resumed.csv",
+      mimeType: "text/csv",
+      buffer: Buffer.from("ticker,quantity,costBasis\nMSFT,1,100")
+    });
+    const resumedImport = await createDocImportJob("dev-user-12345-uuid-67890", portfolioId, resumedSource, "resumed-processing");
+    await updateDocImportJob("dev-user-12345-uuid-67890", portfolioId, resumedImport.importId, "PROCESSING", null, null);
+    await processImportMessage({ userId: "dev-user-12345-uuid-67890", portfolioId, importId: resumedImport.importId });
+    const resumedJob = await getDocImportJob("dev-user-12345-uuid-67890", resumedImport.importId, portfolioId);
+    if (resumedJob.status !== "READY_FOR_REVIEW") {
+      throw new Error(`Expected a redelivered PROCESSING job to resume, got ${resumedJob.status}`);
+    }
+    console.log("  PASS: A redelivered PROCESSING job resumes idempotently");
 
     await markPortfolioDeleting("dev-user-12345-uuid-67890", portfolioId);
     let blockedCreateError;
