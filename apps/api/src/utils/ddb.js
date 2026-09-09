@@ -770,6 +770,33 @@ async function confirmDocImport(userId, job) {
   };
 }
 
+/** Returns stored document pointers for import jobs owned by one portfolio. */
+async function getPortfolioDocumentSources(userId, portfolioId) {
+  const pk = `USER#${userId}`;
+  const skPrefix = `PORTFOLIO#${portfolioId}#DOC_IMPORT#`;
+  if (isMock) {
+    return mockDb
+      .filter(item => item.PK === pk && item.SK.startsWith(skPrefix) && item.sourceDocument)
+      .map(item => item.sourceDocument);
+  }
+  if (!ddbDocClient) throw new Error("DynamoDB client is not initialized");
+
+  const sourceDocuments = [];
+  let exclusiveStartKey;
+  do {
+    const response = await ddbDocClient.send(new QueryCommand({
+      TableName: tableName,
+      KeyConditionExpression: "PK = :pk AND begins_with(SK, :skPrefix)",
+      ExpressionAttributeValues: { ":pk": pk, ":skPrefix": skPrefix },
+      ProjectionExpression: "sourceDocument",
+      ExclusiveStartKey: exclusiveStartKey
+    }));
+    sourceDocuments.push(...(response.Items || []).map(item => item.sourceDocument).filter(Boolean));
+    exclusiveStartKey = response.LastEvaluatedKey;
+  } while (exclusiveStartKey);
+  return sourceDocuments;
+}
+
 module.exports = {
   putTransaction,
   getTransactions,
@@ -787,5 +814,6 @@ module.exports = {
   getDocImportJob,
   updateDocImportJob,
   confirmDocImport,
+  getPortfolioDocumentSources,
   isMock
 };

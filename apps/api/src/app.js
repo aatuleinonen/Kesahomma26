@@ -6,7 +6,7 @@ const multer = require("multer");
 const { authMiddleware } = require("./middleware/auth");
 const { auditMiddleware, logEvent } = require("./utils/logger");
 const { getUserId, buildIsolatedQueryParams } = require("./utils/db");
-const { putTransaction, getTransactions, getPortfolios, getPortfolio, putPortfolio, deletePortfolio, deleteTransaction, updateTransaction, createAnalysisJob, getAnalysisJob, updateAnalysisJob, createDocImportJob, getDocImportJob, updateDocImportJob, confirmDocImport } = require("./utils/ddb");
+const { putTransaction, getTransactions, getPortfolios, getPortfolio, getPortfolioDocumentSources, putPortfolio, deletePortfolio, deleteTransaction, updateTransaction, createAnalysisJob, getAnalysisJob, updateAnalysisJob, createDocImportJob, getDocImportJob, updateDocImportJob, confirmDocImport } = require("./utils/ddb");
 const { deleteDocument, storeDocument } = require("./utils/documentStorage");
 const { enqueueDocumentImport } = require("./utils/documentQueue");
 const { validateNewTransaction, calculatePortfolioState, validateTransactionsState } = require("./utils/transactions");
@@ -16,7 +16,11 @@ const app = express();
 app.use(auditMiddleware);
 app.use(express.json({ limit: "100kb" }));
 
-const maxUploadSizeBytes = Number.parseInt(process.env.DOCUMENT_UPLOAD_MAX_BYTES, 10) || 10 * 1024 * 1024;
+const lambdaProxyUploadLimitBytes = 4 * 1024 * 1024;
+const configuredUploadLimitBytes = Number.parseInt(process.env.DOCUMENT_UPLOAD_MAX_BYTES, 10);
+const maxUploadSizeBytes = Number.isSafeInteger(configuredUploadLimitBytes) && configuredUploadLimitBytes > 0
+  ? Math.min(configuredUploadLimitBytes, lambdaProxyUploadLimitBytes)
+  : lambdaProxyUploadLimitBytes;
 const allowedUploadMimeTypes = {
   ".pdf": ["application/pdf", "application/octet-stream"],
   ".csv": ["text/csv", "text/plain", "application/vnd.ms-excel"],
@@ -299,6 +303,8 @@ app.delete("/api/portfolios/:portfolioId", authMiddleware, async (req, res) => {
   try {
     const userId = getUserId(req);
     const { portfolioId } = req.params;
+    const sourceDocuments = await getPortfolioDocumentSources(userId, portfolioId);
+    await Promise.all(sourceDocuments.map(deleteDocument));
     const result = await deletePortfolio(userId, portfolioId);
 
     if (!result) {
