@@ -1,6 +1,6 @@
 const crypto = require("crypto");
 const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
-const { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, DeleteCommand, TransactWriteCommand, UpdateCommand, BatchWriteCommand } = require("@aws-sdk/lib-dynamodb");
+const { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, ScanCommand, DeleteCommand, TransactWriteCommand, UpdateCommand, BatchWriteCommand } = require("@aws-sdk/lib-dynamodb");
 
 const tableName = process.env.DYNAMODB_TABLE_NAME || "kesahomma26-data";
 
@@ -667,6 +667,39 @@ async function getDocImportJob(userId, importId, portfolioId) {
   return response.Items?.[0] || null;
 }
 
+/** Finds stale uploaded jobs so a scheduled worker can repair API-to-SQS dispatch gaps. */
+async function getStaleUploadedDocImports(cutoffIso, maxJobs = 25) {
+  const toDispatchMessage = item => ({
+    userId: item.PK.slice("USER#".length),
+    portfolioId: item.portfolioId,
+    importId: item.importId
+  });
+  const isStaleUpload = item => item.type === "document_import"
+    && item.status === "UPLOADED"
+    && typeof item.createdAt === "string"
+    && item.createdAt <= cutoffIso;
+
+  if (isMock) return mockDb.filter(isStaleUpload).slice(0, maxJobs).map(toDispatchMessage);
+  if (!ddbDocClient) throw new Error("DynamoDB client is not initialized");
+
+  const jobs = [];
+  let exclusiveStartKey;
+  do {
+    const response = await ddbDocClient.send(new ScanCommand({
+      TableName: tableName,
+      FilterExpression: "#type = :type AND #status = :uploaded AND #createdAt <= :cutoff",
+      ExpressionAttributeNames: { "#type": "type", "#status": "status", "#createdAt": "createdAt" },
+      ExpressionAttributeValues: { ":type": "document_import", ":uploaded": "UPLOADED", ":cutoff": cutoffIso },
+      ProjectionExpression: "PK, portfolioId, importId",
+      ExclusiveStartKey: exclusiveStartKey
+    }));
+    jobs.push(...(response.Items || []).map(toDispatchMessage));
+    exclusiveStartKey = response.LastEvaluatedKey;
+  } while (exclusiveStartKey && jobs.length < maxJobs);
+
+  return jobs.slice(0, maxJobs);
+}
+
 /**
  * Updates status, extractedData, and error of an existing document import job.
  * 
@@ -779,6 +812,7 @@ module.exports = {
   updateAnalysisJob,
   createDocImportJob,
   getDocImportJob,
+  getStaleUploadedDocImports,
   updateDocImportJob,
   getPortfolioDocumentSources,
   isMock
