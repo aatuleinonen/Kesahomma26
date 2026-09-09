@@ -4,7 +4,7 @@ process.env.BYPASS_AUTH = "true";
 process.env.MOCK_DYNAMODB = "true";
 
 const app = require("./app");
-const { clearMockDb, createDocImportJob, getDocImportJob, putPortfolio, updateDocImportJob } = require("./utils/ddb");
+const { clearMockDb, createDocImportJob, getDocImportJob, markPortfolioDeleting, putPortfolio, updateDocImportJob } = require("./utils/ddb");
 const { clearMockDocuments, loadDocument } = require("./utils/documentStorage");
 const { processImportMessage } = require("./document-worker");
 
@@ -287,6 +287,21 @@ const server = app.listen(PORT, async () => {
       throw new Error(`Expected 400 for malformed extracted numeric values, got ${invalidConfirm.status}`);
     }
     console.log("  PASS: Malformed extracted numeric values cannot be confirmed");
+    await markPortfolioDeleting("dev-user-12345-uuid-67890", portfolioId);
+    let blockedCreateError;
+    try {
+      await createDocImportJob("dev-user-12345-uuid-67890", portfolioId, null, "blocked-import");
+    } catch (error) {
+      blockedCreateError = error;
+    }
+    if (blockedCreateError?.name !== "TransactionCanceledException") {
+      throw new Error("Expected the deletion marker to reject new document import jobs");
+    }
+    const blockedUpload = await uploadFile("blocked.csv", "ticker,quantity,costBasis\nAAPL,1,100", "text/csv");
+    if (blockedUpload.status !== 409) {
+      throw new Error(`Expected 409 while portfolio deletion is active, got ${blockedUpload.status}`);
+    }
+    console.log("  PASS: Portfolio deletion marker blocks new imports");
 
     console.log("\n--- All Document Upload API integration tests passed! ---");
 

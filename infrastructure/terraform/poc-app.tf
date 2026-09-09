@@ -82,6 +82,7 @@ resource "aws_iam_role_policy" "api_lambda" {
           "dynamodb:GetItem",
           "dynamodb:PutItem",
           "dynamodb:Query",
+          "dynamodb:TransactWriteItems",
           "dynamodb:UpdateItem"
         ]
         Resource = [

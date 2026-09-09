@@ -48,7 +48,6 @@ async function loadDocument(sourceDocument) {
     if (!body) throw new Error("Uploaded document is not available");
     return Buffer.from(body);
   }
-
   const response = await s3Client.send(new GetObjectCommand({
     Bucket: sourceDocument.bucket,
     Key: sourceDocument.key
@@ -71,4 +70,9 @@ function clearMockDocuments() {
   mockDocuments.clear();
 }
 
-module.exports = { storeDocument, loadDocument, deleteDocument, clearMockDocuments };
+function hasMockDocument(sourceDocument) {
+  if (!isMock) throw new Error("Mock document inspection is only available in tests");
+  return mockDocuments.has(sourceDocument.key);
+}
+
+module.exports = { storeDocument, loadDocument, deleteDocument, clearMockDocuments, hasMockDocument };

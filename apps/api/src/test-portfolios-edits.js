@@ -5,7 +5,7 @@ process.env.MOCK_DYNAMODB = "true";
 
 const app = require("./app");
 const { clearMockDb, createDocImportJob, deletePortfolio, getPortfolios, putPortfolio } = require("./utils/ddb");
-const { loadDocument, storeDocument } = require("./utils/documentStorage");
+const { hasMockDocument, storeDocument } = require("./utils/documentStorage");
 
 const PORT = Number(process.env.PORT || 3002);
 const server = app.listen(PORT, async () => {
@@ -175,13 +175,7 @@ const server = app.listen(PORT, async () => {
     if (d13Portfolios.portfolios.length !== 0 || d13Transactions.transactions.length !== 0) {
       throw new Error("Expected portfolio metadata and transactions to be deleted");
     }
-    let documentReadError;
-    try {
-      await loadDocument(sourceDocument);
-    } catch (error) {
-      documentReadError = error;
-    }
-    if (documentReadError?.message !== "Uploaded document is not available") {
+    if (hasMockDocument(sourceDocument)) {
       throw new Error("Expected the uploaded document to be deleted with the portfolio");
     }
     console.log("  PASS: Portfolio and related records deleted");
