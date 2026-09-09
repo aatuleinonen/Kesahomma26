@@ -15,6 +15,12 @@ app.use(auditMiddleware);
 app.use(express.json({ limit: "100kb" }));
 
 const maxUploadSizeBytes = Number.parseInt(process.env.DOCUMENT_UPLOAD_MAX_BYTES, 10) || 10 * 1024 * 1024;
+const allowedUploadMimeTypes = {
+  ".pdf": ["application/pdf", "application/octet-stream"],
+  ".csv": ["text/csv", "text/plain", "application/vnd.ms-excel"],
+  ".xlsx": ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/octet-stream"],
+  ".xls": ["application/vnd.ms-excel", "application/octet-stream"]
+};
 
 function normalizeUploadFilename(originalName) {
   return String(originalName || "document")
@@ -31,11 +37,12 @@ const upload = multer({
   fileFilter: (req, file, cb) => {
     const allowedExtensions = [".pdf", ".xlsx", ".xls", ".csv"];
     const ext = path.extname(file.originalname || "").toLowerCase();
-    if (allowedExtensions.includes(ext)) {
+    const mimeType = (file.mimetype || "").toLowerCase();
+    if (allowedExtensions.includes(ext) && allowedUploadMimeTypes[ext].includes(mimeType)) {
       cb(null, true);
     } else {
-      const err = new Error("Invalid file extension. Only .pdf, .xlsx, .xls, and .csv are supported.");
-      err.code = "INVALID_FILE_EXTENSION";
+      const err = new Error("Invalid file type. Only supported PDF, CSV, XLSX, and XLS documents are accepted.");
+      err.code = "INVALID_FILE_TYPE";
       cb(err);
     }
   }
@@ -515,7 +522,7 @@ app.post("/api/portfolios/:portfolioId/upload", authMiddleware, (req, res, next)
           message: statusCode === 413 ? "Uploaded file is too large" : err.message || "Invalid upload"
         });
       }
-      if (err.code === "INVALID_FILE_EXTENSION") {
+      if (err.code === "INVALID_FILE_TYPE") {
         return res.status(400).json({
           status: "error",
           message: err.message || "Invalid file type. Only .pdf, .xlsx, .xls, and .csv are supported."
@@ -674,7 +681,7 @@ app.post("/api/portfolios/:portfolioId/upload/:importId/confirm", authMiddleware
     });
   } catch (err) {
     if (err?.name === "ConditionalCheckFailedException" || err?.name === "TransactionCanceledException") {
-      return res.status(409).json({
+      return res.status(400).json({
         status: "error",
         message: "Document import was already confirmed or is no longer ready for confirmation"
       });

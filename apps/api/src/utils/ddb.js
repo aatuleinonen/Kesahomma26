@@ -700,7 +700,7 @@ async function batchWriteAssets(userId, portfolioId, assets) {
  */
 async function confirmDocImport(userId, job) {
   const validAssets = (Array.isArray(job.extractedData) ? job.extractedData : [])
-    .filter(asset => asset && typeof asset === "object" && !Array.isArray(asset));
+    .filter(asset => asset && typeof asset === "object" && !Array.isArray(asset) && typeof asset.ticker === "string" && asset.ticker.trim());
 
   if (validAssets.length > 99) {
     const err = new Error("Document import contains too many assets to confirm atomically");
@@ -711,13 +711,14 @@ async function confirmDocImport(userId, job) {
   const pk = `USER#${userId}`;
   const now = new Date().toISOString();
   const assetItems = [...new Map(validAssets.map(asset => {
-    const assetId = asset.assetId || asset.ticker || crypto.randomUUID();
+    const ticker = asset.ticker.trim();
+    const assetId = asset.assetId || ticker || crypto.randomUUID();
     return [assetId, {
       PK: pk,
       SK: `PORTFOLIO#${job.portfolioId}#ASSET#${assetId}`,
       portfolioId: job.portfolioId,
       assetId,
-      ticker: asset.ticker,
+      ticker,
       quantity: parseFloat(asset.quantity) || 0,
       costBasis: parseFloat(asset.costBasis) || 0,
       type: "asset",

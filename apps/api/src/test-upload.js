@@ -19,9 +19,15 @@ const server = app.listen(PORT, async () => {
     const portfolioId = "portfolio-upload-123";
 
     // Helper to perform multipart upload
-    const uploadFile = async (filename, content = "sample content", mimeType = "text/plain") => {
+    const uploadFile = async (filename, content = "sample content", mimeType) => {
       const formData = new FormData();
-      const blob = new Blob([content], { type: mimeType });
+      const uploadMimeType = mimeType || {
+        ".pdf": "application/pdf",
+        ".csv": "text/csv",
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".xls": "application/vnd.ms-excel"
+      }[filename.slice(filename.lastIndexOf(".")).toLowerCase()] || "application/octet-stream";
+      const blob = new Blob([content], { type: uploadMimeType });
       formData.append("file", blob, filename);
 
       const res = await fetch(`http://localhost:${PORT}/api/portfolios/${portfolioId}/upload`, {
@@ -76,6 +82,12 @@ const server = app.listen(PORT, async () => {
       }
       console.log(`  PASS: ${filename} rejected with 400 Bad Request as expected`);
     }
+
+    const mismatchedMime = await uploadFile("not-a-pdf.pdf", "sample content", "text/csv");
+    if (mismatchedMime.status !== 400 || mismatchedMime.data.status !== "error") {
+      throw new Error(`Expected 400 for mismatched filename and MIME type, got ${mismatchedMime.status}: ${JSON.stringify(mismatchedMime.data)}`);
+    }
+    console.log("  PASS: Mismatched filename and MIME type rejected with 400 Bad Request");
 
     // Test upload with no file
     const resNoFile = await fetch(`http://localhost:${PORT}/api/portfolios/${portfolioId}/upload`, {
