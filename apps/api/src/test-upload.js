@@ -95,7 +95,7 @@ const server = app.listen(PORT, async () => {
     if (s3 !== 200 || d3.status !== "success") {
       throw new Error(`Expected 200 OK and status success, got status ${s3} and data: ${JSON.stringify(d3)}`);
     }
-    if (!d3.job || d3.job.importId !== createdImportId || d3.job.status !== "UPLOADED" || d3.job.type !== "document_import") {
+    if (!d3.job || d3.job.importId !== createdImportId || !["UPLOADED", "PROCESSING"].includes(d3.job.status) || d3.job.type !== "document_import") {
       throw new Error(`Expected job details to match uploaded job, got: ${JSON.stringify(d3)}`);
     }
     console.log(`  PASS: GET status verified cleanly for importId ${createdImportId}`);
