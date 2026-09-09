@@ -163,6 +163,29 @@ resource "aws_s3_bucket_public_access_block" "document_imports" {
   restrict_public_buckets = true
 }
 
+resource "aws_s3_bucket_policy" "document_imports" {
+  bucket = aws_s3_bucket.document_imports.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "DenyInsecureTransport"
+      Effect    = "Deny"
+      Principal = "*"
+      Action    = "s3:*"
+      Resource = [
+        aws_s3_bucket.document_imports.arn,
+        "${aws_s3_bucket.document_imports.arn}/*"
+      ]
+      Condition = {
+        Bool = {
+          "aws:SecureTransport" = "false"
+        }
+      }
+    }]
+  })
+}
+
 resource "aws_s3_bucket_server_side_encryption_configuration" "document_imports" {
   bucket = aws_s3_bucket.document_imports.id
   rule {

@@ -199,19 +199,26 @@ async function markPortfolioDeleting(userId, portfolioId) {
     portfolio.deletionStartedAt = deletionStartedAt;
     return portfolio;
   }
-  const response = await ddbDocClient.send(new UpdateCommand({
-    TableName: tableName,
-    Key: { PK: pk, SK: sk },
-    UpdateExpression: "SET #deletionStatus = :deleting, #deletionStartedAt = :startedAt",
-    ExpressionAttributeNames: {
-      "#deletionStatus": "deletionStatus",
-      "#deletionStartedAt": "deletionStartedAt"
-    },
-    ExpressionAttributeValues: { ":deleting": "DELETING", ":startedAt": deletionStartedAt },
-    ConditionExpression: "attribute_exists(PK) AND attribute_not_exists(#deletionStatus)",
-    ReturnValues: "ALL_NEW"
-  }));
-  return response.Attributes;
+  try {
+    const response = await ddbDocClient.send(new UpdateCommand({
+      TableName: tableName,
+      Key: { PK: pk, SK: sk },
+      UpdateExpression: "SET #deletionStatus = :deleting, #deletionStartedAt = :startedAt",
+      ExpressionAttributeNames: {
+        "#deletionStatus": "deletionStatus",
+        "#deletionStartedAt": "deletionStartedAt"
+      },
+      ExpressionAttributeValues: { ":deleting": "DELETING", ":startedAt": deletionStartedAt },
+      ConditionExpression: "attribute_exists(PK) AND attribute_not_exists(#deletionStatus)",
+      ReturnValues: "ALL_NEW"
+    }));
+    return response.Attributes;
+  } catch (error) {
+    if (error?.name !== "ConditionalCheckFailedException") throw error;
+    const currentPortfolio = await getPortfolio(userId, portfolioId);
+    if (!currentPortfolio || currentPortfolio.deletionStatus === "DELETING") return currentPortfolio;
+    throw error;
+  }
 }
 
 /**
