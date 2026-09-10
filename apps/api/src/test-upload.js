@@ -156,11 +156,11 @@ const server = app.listen(PORT, async () => {
       createdImportId ||= data.job.importId;
     }
 
-    const failedUpload = await uploadFile("missing-cost.csv", "ticker,quantity,costBasis\nAAPL,1,", "text/csv");
-    if (failedUpload.status !== 201) {
-      throw new Error(`Expected malformed CSV to be accepted for asynchronous validation, got ${failedUpload.status}`);
+    const reviewUpload = await uploadFile("missing-cost.csv", "ticker,quantity,costBasis\nAAPL,1,", "text/csv");
+    if (reviewUpload.status !== 201) {
+      throw new Error(`Expected CSV with a missing optional cost basis to be accepted, got ${reviewUpload.status}`);
     }
-    const failedImportId = failedUpload.data.job.importId;
+    const reviewImportId = reviewUpload.data.job.importId;
 
     // 2. Invalid and unsupported file uploads.
     console.log("\nTest 2: Upload invalid files returns 400 Bad Request...");
@@ -229,19 +229,21 @@ const server = app.listen(PORT, async () => {
     }
     console.log(`  PASS: GET status verified cleanly for importId ${createdImportId}`);
 
-    let failedJob;
-    const failedStartTime = Date.now();
-    while (Date.now() - failedStartTime < 2000) {
-      const result = await getRequest(`/api/portfolios/${portfolioId}/upload/${failedImportId}`);
-      failedJob = result.data?.job;
-      if (result.status === 200 && failedJob?.status === "FAILED") break;
+    let reviewJob;
+    const reviewStartTime = Date.now();
+    while (Date.now() - reviewStartTime < 2000) {
+      const result = await getRequest(`/api/portfolios/${portfolioId}/upload/${reviewImportId}`);
+      reviewJob = result.data?.job;
+      if (result.status === 200 && reviewJob?.status === "READY_FOR_REVIEW") break;
       await new Promise(resolve => setTimeout(resolve, 50));
     }
-    if (failedJob?.status !== "FAILED" || !failedJob.error) {
-      throw new Error(`Expected failed parser status to include an actionable error, got: ${JSON.stringify(failedJob)}`);
+    const missingCostHolding = reviewJob?.extractedData?.[0];
+    if (reviewJob?.status !== "READY_FOR_REVIEW" || missingCostHolding?.costBasis !== null
+      || !missingCostHolding?.validation?.missingFields?.includes("costBasis")) {
+      throw new Error(`Expected missing cost basis to reach review with validation metadata, got: ${JSON.stringify(reviewJob)}`);
     }
-    await expectSourceDeleted(failedImportId);
-    console.log("  PASS: Failed parser status includes its error");
+    await expectSourceDeleted(reviewImportId);
+    console.log("  PASS: Missing optional cost basis is surfaced for review");
 
     // 4. GET Non-existent Job Returns 404
     console.log("\nTest 4: GET non-existent import job returns 404...");
