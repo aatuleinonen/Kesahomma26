@@ -7,7 +7,7 @@ process.env.DOCUMENT_UPLOAD_MAX_BYTES = "1024";
 const app = require("./app");
 const { claimDocImportDispatch, clearMockDb, createDocImportJob, getDocImportJob, getPortfolioDocumentSources, getStaleUploadedDocImports, markPortfolioDeleting, putPortfolio, updateDocImportJob } = require("./utils/ddb");
 const { clearMockDocuments, getMockDocumentCount, loadDocument, storeDocument } = require("./utils/documentStorage");
-const { handler: documentWorkerHandler, processImportMessage, requeueStaleDocumentImports } = require("./document-worker");
+const { finalizeImportFailure, handler: documentWorkerHandler, processImportMessage, requeueStaleDocumentImports } = require("./document-worker");
 
 const PORT = Number(process.env.PORT || 3004);
 const server = app.listen(PORT, async () => {
@@ -123,7 +123,6 @@ const server = app.listen(PORT, async () => {
     const emptyUpload = await uploadFile("empty.csv", "", "text/csv");
     if (emptyUpload.status !== 400) throw new Error(`Expected empty upload to return 400, got ${emptyUpload.status}`);
 
-    const documentsBeforeBoundaryTests = getMockDocumentCount();
     const jobsBeforeBoundaryTests = (await getPortfolioDocumentSources("dev-user-12345-uuid-67890", portfolioId)).length;
     const csvPrefix = "ticker,quantity,costBasis\nAAPL,1,100\n";
     const atLimitContent = csvPrefix + " ".repeat(1024 - Buffer.byteLength(csvPrefix));
@@ -137,8 +136,8 @@ const server = app.listen(PORT, async () => {
     if (oversizedUpload.status !== 413 || getMockDocumentCount() !== documentsBeforeOversize || jobsAfterOversize !== jobsBeforeOversize) {
       throw new Error("Expected oversized upload to return 413 without creating a document or import job");
     }
-    if (documentsBeforeOversize !== documentsBeforeBoundaryTests + 1 || jobsBeforeOversize !== jobsBeforeBoundaryTests + 1) {
-      throw new Error("Expected the exact-limit upload to create one document import");
+    if (jobsBeforeOversize !== jobsBeforeBoundaryTests + 1) {
+      throw new Error("Expected the exact-limit upload to create one document import before asynchronous cleanup");
     }
 
     // Test upload with no file
@@ -274,6 +273,26 @@ const server = app.listen(PORT, async () => {
       throw new Error(`Expected reconciliation to dispatch a stale UPLOADED job, got ${reconciledJob.status}`);
     }
     console.log("  PASS: Reconciliation dispatches stale UPLOADED jobs");
+
+    const exhaustedSource = await storeDocument("dev-user-12345-uuid-67890", portfolioId, "exhausted-processing", {
+      originalName: "exhausted.csv",
+      mimeType: "text/csv",
+      buffer: Buffer.from("ticker,quantity,costBasis\nAMZN,1,100")
+    });
+    const exhaustedImport = await createDocImportJob("dev-user-12345-uuid-67890", portfolioId, exhaustedSource, "exhausted-processing");
+    await updateDocImportJob("dev-user-12345-uuid-67890", portfolioId, exhaustedImport.importId, "PROCESSING", null, null);
+    await finalizeImportFailure({ userId: "dev-user-12345-uuid-67890", portfolioId, importId: exhaustedImport.importId });
+    const exhaustedJob = await getDocImportJob("dev-user-12345-uuid-67890", exhaustedImport.importId, portfolioId);
+    let exhaustedSourceDeleted = false;
+    try {
+      await loadDocument(exhaustedSource);
+    } catch {
+      exhaustedSourceDeleted = true;
+    }
+    if (exhaustedJob.status !== "FAILED" || !exhaustedSourceDeleted) {
+      throw new Error("Expected exhausted processing failures to become terminal and delete their source");
+    }
+    console.log("  PASS: Exhausted non-read failures become terminal and clean up their source");
 
     await markPortfolioDeleting("dev-user-12345-uuid-67890", portfolioId);
     let blockedCreateError;
