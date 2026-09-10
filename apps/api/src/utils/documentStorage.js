@@ -5,6 +5,7 @@ const { DeleteObjectCommand, DeleteObjectsCommand, GetObjectCommand, PutObjectCo
 const isMock = process.env.MOCK_DYNAMODB === "true" || process.env.NODE_ENV === "test";
 const bucketName = process.env.DOCUMENT_IMPORT_BUCKET;
 const mockDocuments = new Map();
+let mockStoreDocumentHook;
 let s3Client;
 
 if (!isMock) {
@@ -28,6 +29,7 @@ async function storeDocument(userId, portfolioId, importId, file) {
 
   if (isMock) {
     mockDocuments.set(key, Buffer.from(file.buffer));
+    if (mockStoreDocumentHook) await mockStoreDocumentHook(sourceDocument);
     return sourceDocument;
   }
   if (!bucketName) throw new Error("DOCUMENT_IMPORT_BUCKET is not configured");
@@ -119,4 +121,9 @@ function getMockDocumentCount() {
   return mockDocuments.size;
 }
 
-module.exports = { storeDocument, loadDocument, deleteDocument, deleteDocuments, clearMockDocuments, getMockDocumentCount, hasMockDocument };
+function setMockStoreDocumentHook(hook) {
+  if (!isMock) throw new Error("Mock document hooks are only available in tests");
+  mockStoreDocumentHook = hook;
+}
+
+module.exports = { storeDocument, loadDocument, deleteDocument, deleteDocuments, clearMockDocuments, getMockDocumentCount, hasMockDocument, setMockStoreDocumentHook };
