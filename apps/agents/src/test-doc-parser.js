@@ -41,6 +41,22 @@ async function main() {
   assert.equal(invalidUtf8Status, "FAILED");
   assert.match(encodingFailure, /valid UTF-8/);
 
+  for (const [value, expectedMessage] of [
+    ["0x10", /non-decimal quantity/],
+    ["0b10", /non-decimal quantity/],
+    ["0o10", /non-decimal quantity/],
+    ["1e126", /out-of-range quantity/],
+    ["9007199254740993", /out-of-range quantity/],
+    ["1e-200", /out-of-range quantity/]
+  ]) {
+    let numericFailure;
+    const status = await processDocumentImport("user", "portfolio", `invalid-number-${value}`, document(`ticker,quantity,costBasis\nAAPL,${value},100`), async (nextStatus, data, error) => {
+      if (nextStatus === "FAILED") numericFailure = error;
+    });
+    assert.equal(status, "FAILED");
+    assert.match(numericFailure, expectedMessage);
+  }
+
   await expectRejected(
     () => processDocumentImport("user", "portfolio", "processing-write", document("ticker,quantity,costBasis\nAAPL,1,100"), async status => {
       if (status === "PROCESSING") throw new Error("processing persistence failed");

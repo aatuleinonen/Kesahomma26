@@ -2,6 +2,29 @@ const path = require("path");
 const { parse } = require("csv-parse/sync");
 
 const maxReviewPayloadBytes = 300 * 1024;
+const decimalNumberPattern = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+const maxFinancialValue = 1e15;
+const minNonZeroFinancialValue = 1e-12;
+
+function parseFinancialValue(value, { rowNumber, field, allowZero }) {
+  const text = String(value ?? "").trim();
+  if (!text) throw new Error(`CSV row ${rowNumber} is missing ${field}`);
+  if (!decimalNumberPattern.test(text)) throw new Error(`CSV row ${rowNumber} has a non-decimal ${field}`);
+
+  const significantDigits = text
+    .replace(/^[+-]/, "")
+    .split(/[eE]/, 1)[0]
+    .replace(".", "")
+    .replace(/^0+/, "").length;
+  const parsed = Number(text);
+  const magnitudeIsValid = parsed === 0
+    ? allowZero
+    : Math.abs(parsed) >= minNonZeroFinancialValue && Math.abs(parsed) <= maxFinancialValue;
+  if (!Number.isFinite(parsed) || significantDigits > 15 || !magnitudeIsValid || (!allowZero && parsed <= 0) || (allowZero && parsed < 0)) {
+    throw new Error(`CSV row ${rowNumber} contains an out-of-range ${field}`);
+  }
+  return parsed;
+}
 
 /**
  * Extracts reviewed holdings from a persisted CSV document.
@@ -45,14 +68,10 @@ async function processDocumentImport(userId, portfolioId, importId, document, up
       const quantityValue = row.quantity;
       const costBasisValue = row.costbasis ?? row.cost_basis;
       const ticker = String(tickerValue ?? "").trim();
-      if (String(quantityValue ?? "").trim() === "" || String(costBasisValue ?? "").trim() === "") {
-        throw new Error(`CSV row ${index + 2} is missing quantity or cost basis`);
-      }
-      const quantity = Number(quantityValue);
-      const costBasis = Number(costBasisValue);
-      if (!ticker || !Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(costBasis) || costBasis < 0) {
-        throw new Error(`CSV row ${index + 2} contains invalid holding values`);
-      }
+      const rowNumber = index + 2;
+      if (!ticker) throw new Error(`CSV row ${rowNumber} is missing ticker`);
+      const quantity = parseFinancialValue(quantityValue, { rowNumber, field: "quantity", allowZero: false });
+      const costBasis = parseFinancialValue(costBasisValue, { rowNumber, field: "cost basis", allowZero: true });
       return { ticker, quantity, costBasis };
     });
     if (extracted.length === 0) throw new Error("CSV does not contain any holdings");

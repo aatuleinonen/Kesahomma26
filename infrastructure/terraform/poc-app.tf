@@ -215,9 +215,10 @@ resource "aws_s3_bucket_lifecycle_configuration" "document_imports" {
 }
 
 resource "aws_sqs_queue" "document_imports_dlq" {
-  name                      = "${local.resource_prefix}-document-imports-dlq"
-  message_retention_seconds = 1209600
-  sqs_managed_sse_enabled   = true
+  name                       = "${local.resource_prefix}-document-imports-dlq"
+  message_retention_seconds  = 1209600
+  visibility_timeout_seconds = 180
+  sqs_managed_sse_enabled    = true
 }
 
 resource "aws_sqs_queue" "document_imports" {
