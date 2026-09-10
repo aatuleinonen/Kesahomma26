@@ -2,9 +2,10 @@ process.env.PORT = "3004";
 process.env.NODE_ENV = "development";
 process.env.BYPASS_AUTH = "true";
 process.env.MOCK_DYNAMODB = "true";
+process.env.DOCUMENT_UPLOAD_MAX_BYTES = "1024";
 
 const app = require("./app");
-const { claimDocImportDispatch, clearMockDb, createDocImportJob, getDocImportJob, getStaleUploadedDocImports, markPortfolioDeleting, putPortfolio, updateDocImportJob } = require("./utils/ddb");
+const { claimDocImportDispatch, clearMockDb, createDocImportJob, getDocImportJob, getPortfolioDocumentSources, getStaleUploadedDocImports, markPortfolioDeleting, putPortfolio, updateDocImportJob } = require("./utils/ddb");
 const { clearMockDocuments, getMockDocumentCount, hasMockDocument, loadDocument, storeDocument } = require("./utils/documentStorage");
 const { finalizeImportFailure, handler: documentWorkerHandler, processImportMessage, requeueStaleDocumentImports } = require("./document-worker");
 
@@ -23,7 +24,8 @@ const server = app.listen(PORT, async () => {
     await putPortfolio("dev-user-12345-uuid-67890", { portfolioId, name: "Upload test" });
 
     // Helper to perform multipart upload
-    const uploadFile = async (filename, content = "sample content", mimeType) => {
+    const validCsvContent = "ticker,quantity,costBasis\nAAPL,1,100\n";
+    const uploadFile = async (filename, content = validCsvContent, mimeType) => {
       const extension = filename.slice(filename.lastIndexOf(".")).toLowerCase();
       const uploadMimeType = mimeType || {
         ".pdf": "application/pdf",
@@ -117,6 +119,32 @@ const server = app.listen(PORT, async () => {
       throw new Error(`Expected 400 for mismatched filename and MIME type, got ${mismatchedMime.status}: ${JSON.stringify(mismatchedMime.data)}`);
     }
     console.log("  PASS: Mismatched filename and MIME type rejected with 400 Bad Request");
+
+    for (const filename of ["invalid.csv"]) {
+      const { status, data } = await uploadFile(filename, "sample content");
+      if (status !== 400 || data.status !== "error") {
+        throw new Error(`Expected invalid ${filename} content to return 400, got ${status}: ${JSON.stringify(data)}`);
+      }
+    }
+    const emptyUpload = await uploadFile("empty.csv", "", "text/csv");
+    if (emptyUpload.status !== 400) throw new Error(`Expected empty upload to return 400, got ${emptyUpload.status}`);
+
+    const jobsBeforeBoundaryTests = (await getPortfolioDocumentSources("dev-user-12345-uuid-67890", portfolioId)).length;
+    const csvPrefix = "ticker,quantity,costBasis\nAAPL,1,100\n";
+    const atLimitContent = csvPrefix + " ".repeat(1024 - Buffer.byteLength(csvPrefix));
+    const atLimitUpload = await uploadFile("at-limit.csv", atLimitContent, "text/csv");
+    if (atLimitUpload.status !== 201) throw new Error(`Expected upload at size limit to return 201, got ${atLimitUpload.status}`);
+
+    const documentsBeforeOversize = getMockDocumentCount();
+    const jobsBeforeOversize = (await getPortfolioDocumentSources("dev-user-12345-uuid-67890", portfolioId)).length;
+    const oversizedUpload = await uploadFile("oversized.csv", `${atLimitContent}x`, "text/csv");
+    const jobsAfterOversize = (await getPortfolioDocumentSources("dev-user-12345-uuid-67890", portfolioId)).length;
+    if (oversizedUpload.status !== 413 || getMockDocumentCount() !== documentsBeforeOversize || jobsAfterOversize !== jobsBeforeOversize) {
+      throw new Error("Expected oversized upload to return 413 without creating a document or import job");
+    }
+    if (jobsBeforeOversize !== jobsBeforeBoundaryTests + 1) {
+      throw new Error("Expected the exact-limit upload to create one document import before asynchronous cleanup");
+    }
 
     // Test upload with no file
     const resNoFile = await fetch(`http://localhost:${PORT}/api/portfolios/${portfolioId}/upload`, {
