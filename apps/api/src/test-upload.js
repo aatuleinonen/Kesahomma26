@@ -6,8 +6,59 @@ process.env.DOCUMENT_UPLOAD_MAX_BYTES = "1024";
 
 const app = require("./app");
 const { claimDocImportDispatch, clearMockDb, createDocImportJob, getDocImportJob, getPortfolioDocumentSources, getStaleUploadedDocImports, markPortfolioDeleting, putPortfolio, updateDocImportJob } = require("./utils/ddb");
-const { clearMockDocuments, getMockDocumentCount, hasMockDocument, loadDocument, storeDocument } = require("./utils/documentStorage");
+const { clearMockDocuments, getMockDocumentCount, hasMockDocument, loadDocument, setMockStoreDocumentHook, storeDocument } = require("./utils/documentStorage");
 const { finalizeImportFailure, handler: documentWorkerHandler, processImportMessage, requeueStaleDocumentImports } = require("./document-worker");
+const zlib = require("zlib");
+
+function crc32(buffer) {
+  let crc = 0xFFFFFFFF;
+  for (const byte of buffer) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ ((crc & 1) ? 0xEDB88320 : 0);
+  }
+  return (crc ^ 0xFFFFFFFF) >>> 0;
+}
+
+function createZip(files) {
+  const localParts = [];
+  const centralParts = [];
+  let localOffset = 0;
+  for (const [filename, value] of Object.entries(files)) {
+    const name = Buffer.from(filename);
+    const content = Buffer.from(value);
+    const compressed = zlib.deflateRawSync(content);
+    const checksum = crc32(content);
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034B50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(8, 8);
+    local.writeUInt32LE(checksum, 14);
+    local.writeUInt32LE(compressed.length, 18);
+    local.writeUInt32LE(content.length, 22);
+    local.writeUInt16LE(name.length, 26);
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014B50, 0);
+    central.writeUInt16LE(20, 4);
+    central.writeUInt16LE(20, 6);
+    central.writeUInt16LE(8, 10);
+    central.writeUInt32LE(checksum, 16);
+    central.writeUInt32LE(compressed.length, 20);
+    central.writeUInt32LE(content.length, 24);
+    central.writeUInt16LE(name.length, 28);
+    central.writeUInt32LE(localOffset, 42);
+    localParts.push(local, name, compressed);
+    centralParts.push(central, name);
+    localOffset += local.length + name.length + compressed.length;
+  }
+  const directory = Buffer.concat(centralParts);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054B50, 0);
+  eocd.writeUInt16LE(Object.keys(files).length, 8);
+  eocd.writeUInt16LE(Object.keys(files).length, 10);
+  eocd.writeUInt32LE(directory.length, 12);
+  eocd.writeUInt32LE(localOffset, 16);
+  return Buffer.concat([...localParts, directory, eocd]);
+}
 
 const PORT = Number(process.env.PORT || 3004);
 const server = app.listen(PORT, async () => {
@@ -24,8 +75,17 @@ const server = app.listen(PORT, async () => {
     await putPortfolio("dev-user-12345-uuid-67890", { portfolioId, name: "Upload test" });
 
     // Helper to perform multipart upload
-    const validCsvContent = "ticker,quantity,costBasis\nAAPL,1,100\n";
-    const uploadFile = async (filename, content = validCsvContent, mimeType) => {
+    const validContents = {
+      ".csv": "ticker,quantity,costBasis\nAAPL,1,100\n",
+      ".pdf": Buffer.from("%PDF-1.4\n%%EOF"),
+      ".xls": Buffer.from([0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1, 0, 0]),
+      ".xlsx": createZip({
+        "[Content_Types].xml": "<Types/>",
+        "_rels/.rels": "<Relationships/>",
+        "xl/workbook.xml": "<workbook/>"
+      })
+    };
+    const uploadFile = async (filename, content = validContents[filename.slice(filename.lastIndexOf(".")).toLowerCase()] || "sample content", mimeType) => {
       const extension = filename.slice(filename.lastIndexOf(".")).toLowerCase();
       const uploadMimeType = mimeType || {
         ".pdf": "application/pdf",
@@ -422,8 +482,19 @@ const server = app.listen(PORT, async () => {
     if (blockedCreateError?.name !== "TransactionCanceledException") {
       throw new Error("Expected the deletion marker to reject new document import jobs");
     }
+    const cleanupPortfolioId = "portfolio-cleanup-123";
+    await putPortfolio("dev-user-12345-uuid-67890", { portfolioId: cleanupPortfolioId, name: "Cleanup test" });
     const documentCountBeforeBlockedUpload = getMockDocumentCount();
-    const blockedUpload = await uploadFile("blocked.csv", "ticker,quantity,costBasis\nAAPL,1,100", "text/csv");
+    setMockStoreDocumentHook(() => markPortfolioDeleting("dev-user-12345-uuid-67890", cleanupPortfolioId));
+    const cleanupFormData = new FormData();
+    cleanupFormData.append("file", new Blob(["ticker,quantity,costBasis\nAAPL,1,100"], { type: "text/csv" }), "blocked.csv");
+    const cleanupResponse = await fetch(`http://localhost:${PORT}/api/portfolios/${cleanupPortfolioId}/upload`, {
+      method: "POST",
+      headers: { "Authorization": "Bearer dummy-token" },
+      body: cleanupFormData
+    });
+    setMockStoreDocumentHook(undefined);
+    const blockedUpload = { status: cleanupResponse.status, data: await cleanupResponse.json() };
     if (blockedUpload.status !== 409) {
       throw new Error(`Expected 409 while portfolio deletion is active, got ${blockedUpload.status}`);
     }

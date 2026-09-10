@@ -308,7 +308,7 @@ async function deletePortfolio(userId, portfolioId) {
     return null;
   }
 
-  const records = [metadata];
+  const records = [];
   let exclusiveStartKey;
   do {
     const response = await ddbDocClient.send(new QueryCommand({
@@ -346,7 +346,15 @@ async function deletePortfolio(userId, portfolioId) {
     }
   }
 
-  return { deletedCount: records.length };
+  await ddbDocClient.send(new DeleteCommand({
+    TableName: tableName,
+    Key: { PK: metadata.PK, SK: metadata.SK },
+    ConditionExpression: "#deletionStatus = :deleting",
+    ExpressionAttributeNames: { "#deletionStatus": "deletionStatus" },
+    ExpressionAttributeValues: { ":deleting": "DELETING" }
+  }));
+
+  return { deletedCount: records.length + 1 };
 }
 
 /**
