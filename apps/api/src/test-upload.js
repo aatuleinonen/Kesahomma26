@@ -2,9 +2,10 @@ process.env.PORT = "3004";
 process.env.NODE_ENV = "development";
 process.env.BYPASS_AUTH = "true";
 process.env.MOCK_DYNAMODB = "true";
+process.env.DOCUMENT_UPLOAD_MAX_BYTES = "1024";
 
 const app = require("./app");
-const { clearMockDb, createDocImportJob, markPortfolioDeleting, putPortfolio } = require("./utils/ddb");
+const { clearMockDb, createDocImportJob, getPortfolioDocumentSources, markPortfolioDeleting, putPortfolio } = require("./utils/ddb");
 const { clearMockDocuments, getMockDocumentCount } = require("./utils/documentStorage");
 
 const PORT = Number(process.env.PORT || 3004);
@@ -22,7 +23,13 @@ const server = app.listen(PORT, async () => {
     await putPortfolio("dev-user-12345-uuid-67890", { portfolioId, name: "Upload test" });
 
     // Helper to perform multipart upload
-    const uploadFile = async (filename, content = "sample content", mimeType = "text/plain") => {
+    const validContents = {
+      ".csv": "ticker,quantity,costBasis\nAAPL,1,100\n",
+      ".pdf": Buffer.from("%PDF-1.4\n%%EOF"),
+      ".xls": Buffer.from([0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1, 0, 0]),
+      ".xlsx": Buffer.concat([Buffer.from([0x50, 0x4B, 0x03, 0x04]), Buffer.from("[Content_Types].xml xl/workbook.xml")])
+    };
+    const uploadFile = async (filename, content = validContents[filename.slice(filename.lastIndexOf(".")).toLowerCase()] || "sample content", mimeType = "application/octet-stream") => {
       const formData = new FormData();
       const blob = new Blob([content], { type: mimeType });
       formData.append("file", blob, filename);
@@ -78,6 +85,33 @@ const server = app.listen(PORT, async () => {
         throw new Error(`Expected 400 Bad Request for ${filename}, got status ${status} and data: ${JSON.stringify(data)}`);
       }
       console.log(`  PASS: ${filename} rejected with 400 Bad Request as expected`);
+    }
+
+    for (const filename of validExtensions) {
+      const { status, data } = await uploadFile(filename, "sample content");
+      if (status !== 400 || data.status !== "error") {
+        throw new Error(`Expected invalid ${filename} content to return 400, got ${status}: ${JSON.stringify(data)}`);
+      }
+    }
+    const emptyUpload = await uploadFile("empty.csv", "", "text/csv");
+    if (emptyUpload.status !== 400) throw new Error(`Expected empty upload to return 400, got ${emptyUpload.status}`);
+
+    const documentsBeforeBoundaryTests = getMockDocumentCount();
+    const jobsBeforeBoundaryTests = (await getPortfolioDocumentSources("dev-user-12345-uuid-67890", portfolioId)).length;
+    const csvPrefix = "ticker,quantity,costBasis\nAAPL,1,100\n";
+    const atLimitContent = csvPrefix + " ".repeat(1024 - Buffer.byteLength(csvPrefix));
+    const atLimitUpload = await uploadFile("at-limit.csv", atLimitContent, "text/csv");
+    if (atLimitUpload.status !== 201) throw new Error(`Expected upload at size limit to return 201, got ${atLimitUpload.status}`);
+
+    const documentsBeforeOversize = getMockDocumentCount();
+    const jobsBeforeOversize = (await getPortfolioDocumentSources("dev-user-12345-uuid-67890", portfolioId)).length;
+    const oversizedUpload = await uploadFile("oversized.csv", `${atLimitContent}x`, "text/csv");
+    const jobsAfterOversize = (await getPortfolioDocumentSources("dev-user-12345-uuid-67890", portfolioId)).length;
+    if (oversizedUpload.status !== 413 || getMockDocumentCount() !== documentsBeforeOversize || jobsAfterOversize !== jobsBeforeOversize) {
+      throw new Error("Expected oversized upload to return 413 without creating a document or import job");
+    }
+    if (documentsBeforeOversize !== documentsBeforeBoundaryTests + 1 || jobsBeforeOversize !== jobsBeforeBoundaryTests + 1) {
+      throw new Error("Expected the exact-limit upload to create one document import");
     }
 
     // Test upload with no file
