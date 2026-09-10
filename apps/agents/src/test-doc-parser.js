@@ -20,6 +20,10 @@ async function main() {
     {
       content: "symbol,quantity,cost_basis\nVOO,5,2000",
       expected: [{ ticker: "VOO", quantity: 5, costBasis: 2000 }]
+    },
+    {
+      content: "ticker,quantity,costBasis\nAAPL,2,",
+      expected: [{ ticker: "AAPL", quantity: 2, costBasis: null, validation: { missingFields: ["costBasis"] } }]
     }
   ];
   for (const [index, testCase] of successfulCases.entries()) {
@@ -29,6 +33,15 @@ async function main() {
     });
     assert.equal(status, "READY_FOR_REVIEW");
     assert.deepEqual(extracted, testCase.expected);
+  }
+
+  for (const headers of ["ticker,ticker,quantity,costBasis", "ticker,symbol,quantity,costBasis", "ticker,quantity,costBasis,cost_basis"]) {
+    let headerFailure;
+    const status = await processDocumentImport("user", "portfolio", "duplicate-headers", document(`${headers}\nAAPL,MSFT,1,100`), async (nextStatus, data, error) => {
+      if (nextStatus === "FAILED") headerFailure = error;
+    });
+    assert.equal(status, "FAILED");
+    assert.match(headerFailure, /duplicate or ambiguous/);
   }
 
   let encodingFailure;
@@ -65,7 +78,7 @@ async function main() {
   );
 
   await expectRejected(
-    () => processDocumentImport("user", "portfolio", "failed-write", document("ticker,quantity,costBasis\nAAPL,1,"), async status => {
+    () => processDocumentImport("user", "portfolio", "failed-write", document("ticker,quantity,costBasis\nAAPL,not-a-number,100"), async status => {
       if (status === "FAILED") throw new Error("failed persistence failed");
     }),
     "failed persistence failed"
