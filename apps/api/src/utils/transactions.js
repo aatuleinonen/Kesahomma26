@@ -37,10 +37,11 @@ function calculatePortfolioState(transactions) {
         cash -= amount;
         break;
       case "buy":
+      case "transfer_in":
         if (ticker) {
           holdings[ticker] = (holdings[ticker] || 0) + quantity;
         }
-        cash -= amount;
+        if (type === "buy") cash -= amount;
         break;
       case "sell":
         if (ticker) {
@@ -81,22 +82,36 @@ function validateNewTransaction(newTxn, existingTxns) {
   
   const type = (newTxn.type || "").toLowerCase();
   const ticker = newTxn.ticker;
-  const quantity = parseFloat(newTxn.quantity) || 0;
-  const price = parseFloat(newTxn.price) || 0;
+  const quantity = parseFloat(newTxn.quantity);
+  const hasFiniteQuantity = newTxn.quantity !== null
+    && newTxn.quantity !== undefined
+    && String(newTxn.quantity).trim() !== ""
+    && Number.isFinite(quantity);
+  const price = parseFloat(newTxn.price);
+  const hasFinitePrice = newTxn.price !== null
+    && newTxn.price !== undefined
+    && String(newTxn.price).trim() !== ""
+    && Number.isFinite(price);
   
   let amount = parseFloat(newTxn.amount);
   if (isNaN(amount)) {
     amount = quantity * price;
   }
-  if (amount <= 0) {
+  if (!Number.isFinite(amount)) {
     return {
       valid: false,
-      error: "Amount must be greater than 0"
+      error: "Amount must be a finite number"
+    };
+  }
+  if (type === "transfer_in" ? amount < 0 : amount <= 0) {
+    return {
+      valid: false,
+      error: type === "transfer_in" ? "Amount must be 0 or greater" : "Amount must be greater than 0"
     };
   }
 
   // Validate generic types
-  const validTypes = ["buy", "sell", "deposit", "withdrawal", "dividend", "fee"];
+  const validTypes = ["buy", "sell", "transfer_in", "deposit", "withdrawal", "dividend", "fee"];
   if (!validTypes.includes(type)) {
     return {
       valid: false,
@@ -105,23 +120,29 @@ function validateNewTransaction(newTxn, existingTxns) {
   }
 
   // Check type-specific validations
-  if (type === "buy" || type === "sell") {
+  if (type === "buy" || type === "sell" || type === "transfer_in") {
     if (!ticker) {
       return {
         valid: false,
         error: `Ticker symbol is required for type '${type}'`
       };
     }
-    if (quantity <= 0) {
+    if (!hasFiniteQuantity || quantity <= 0) {
       return {
         valid: false,
-        error: "Quantity must be greater than 0"
+        error: "Quantity is required and must be a finite number greater than 0"
       };
     }
-    if (price <= 0) {
+    if (!hasFinitePrice) {
       return {
         valid: false,
-        error: "Price must be greater than 0"
+        error: `Price is required and must be a finite number for type '${type}'`
+      };
+    }
+    if (type === "transfer_in" ? price < 0 : price <= 0) {
+      return {
+        valid: false,
+        error: type === "transfer_in" ? "Price must be 0 or greater" : "Price must be greater than 0"
       };
     }
   } else {
@@ -208,10 +229,11 @@ function validateTransactionsState(transactions) {
         cash -= amount;
         break;
       case "buy":
+      case "transfer_in":
         if (ticker) {
           holdings[ticker] = (holdings[ticker] || 0) + quantity;
         }
-        cash -= amount;
+        if (type === "buy") cash -= amount;
         break;
       case "sell":
         if (ticker) {

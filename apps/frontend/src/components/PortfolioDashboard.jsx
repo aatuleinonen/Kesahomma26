@@ -107,7 +107,7 @@ export default function PortfolioDashboard({ signOut, user }) {
       let amount = parseFloat(t.amount);
       if (isNaN(amount)) amount = quantity * price;
 
-      if (type === 'buy') {
+      if (type === 'buy' || type === 'transfer_in') {
         if (!metrics[ticker]) {
           metrics[ticker] = { quantity: 0, totalCost: 0, averageCost: 0 };
         }
@@ -241,10 +241,12 @@ export default function PortfolioDashboard({ signOut, user }) {
     const { type, ticker, quantity, price, amount, timestamp } = transactionForm;
     
     // Validations
-    if (type === 'buy' || type === 'sell') {
+    if (['buy', 'sell', 'transfer_in'].includes(type)) {
       if (!ticker.trim()) return setFormError('Ticker is required for trades');
       if (!quantity || parseFloat(quantity) <= 0) return setFormError('Quantity must be greater than 0');
-      if (!price || parseFloat(price) <= 0) return setFormError('Price must be greater than 0');
+      if (price === '' || (type === 'transfer_in' ? parseFloat(price) < 0 : parseFloat(price) <= 0)) {
+        return setFormError(type === 'transfer_in' ? 'Price must be 0 or greater' : 'Price must be greater than 0');
+      }
     } else {
       if (!amount || parseFloat(amount) <= 0) return setFormError('Amount must be greater than 0');
     }
@@ -257,7 +259,7 @@ export default function PortfolioDashboard({ signOut, user }) {
         timestamp: timestamp ? new Date(timestamp).toISOString() : new Date().toISOString()
       };
 
-      if (type === 'buy' || type === 'sell') {
+      if (['buy', 'sell', 'transfer_in'].includes(type)) {
         parsedTxn.ticker = ticker.toUpperCase().trim();
         parsedTxn.quantity = parseFloat(quantity);
         parsedTxn.price = parseFloat(price);
@@ -492,7 +494,7 @@ export default function PortfolioDashboard({ signOut, user }) {
                         </thead>
                         <tbody>
                           {[...transactions].reverse().map((t) => {
-                            const isTrade = t.type === 'buy' || t.type === 'sell';
+                            const isTrade = ['buy', 'sell', 'transfer_in'].includes(t.type);
                             const totalAmount = t.amount ?? (parseFloat(t.quantity) * parseFloat(t.price));
                             return (
                               <tr key={t.timestamp}>
@@ -635,6 +637,7 @@ export default function PortfolioDashboard({ signOut, user }) {
                       <option value="withdrawal">Withdrawal</option>
                       <option value="buy">Buy Asset</option>
                       <option value="sell">Sell Asset</option>
+                      <option value="transfer_in">Transfer In</option>
                       <option value="dividend">Dividend</option>
                       <option value="fee">Fee</option>
                     </select>
@@ -652,7 +655,7 @@ export default function PortfolioDashboard({ signOut, user }) {
                   </div>
                 </div>
 
-                {(transactionForm.type === 'buy' || transactionForm.type === 'sell') ? (
+                {(['buy', 'sell', 'transfer_in'].includes(transactionForm.type)) ? (
                   /* Trade Specific Fields */
                   <>
                     <div className="form-group">
@@ -687,7 +690,7 @@ export default function PortfolioDashboard({ signOut, user }) {
                         <input
                           type="number"
                           step="any"
-                          min="0.01"
+                          min={transactionForm.type === 'transfer_in' ? '0' : '0.01'}
                           className="form-input"
                           placeholder="0.00"
                           value={transactionForm.price}

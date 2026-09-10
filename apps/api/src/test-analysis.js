@@ -5,7 +5,7 @@ process.env.MOCK_DYNAMODB = "true";
 process.env.ENABLE_AI_ANALYSIS = "true";
 
 const app = require("./app");
-const { clearMockDb } = require("./utils/ddb");
+const { clearMockDb, putPortfolio } = require("./utils/ddb");
 
 const PORT = Number(process.env.PORT || 3003);
 const server = app.listen(PORT, async () => {
@@ -33,6 +33,8 @@ const server = app.listen(PORT, async () => {
 
     // Reset database for a clean start
     clearMockDb();
+    await putPortfolio("dev-user-12345-uuid-67890", { portfolioId: "portfolio-123", name: "Analysis test" });
+    await putPortfolio("dev-user-12345-uuid-67890", { portfolioId: "portfolio-abc", name: "Async analysis test" });
 
     console.log("\n--- Executing Asynchronous AI Analysis Job API Tests ---");
 

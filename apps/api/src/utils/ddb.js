@@ -1,6 +1,6 @@
 const crypto = require("crypto");
 const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
-const { DynamoDBDocumentClient, PutCommand, QueryCommand, DeleteCommand, TransactWriteCommand, UpdateCommand, BatchWriteCommand } = require("@aws-sdk/lib-dynamodb");
+const { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, DeleteCommand, TransactWriteCommand, UpdateCommand, BatchWriteCommand } = require("@aws-sdk/lib-dynamodb");
 
 const tableName = process.env.DYNAMODB_TABLE_NAME || "kesahomma26-data";
 
@@ -19,6 +19,43 @@ if (!isMock) {
     ddbDocClient = DynamoDBDocumentClient.from(client);
   } catch (err) {
     console.error("Failed to initialize real DynamoDB Client, falling back to mock:", err);
+  }
+}
+
+function portfolioAvailableCondition(pk, portfolioId) {
+  return {
+    ConditionCheck: {
+      TableName: tableName,
+      Key: { PK: pk, SK: `METADATA#PORTFOLIO#${portfolioId}` },
+      ConditionExpression: "attribute_exists(PK) AND (attribute_not_exists(#deletionStatus) OR #deletionStatus <> :deleting)",
+      ExpressionAttributeNames: { "#deletionStatus": "deletionStatus" },
+      ExpressionAttributeValues: { ":deleting": "DELETING" }
+    }
+  };
+}
+
+function assertMockPortfolioAvailable(pk, portfolioId) {
+  const portfolio = mockDb.find(item => item.PK === pk && item.SK === `METADATA#PORTFOLIO#${portfolioId}`);
+  if (!portfolio || portfolio.deletionStatus === "DELETING") {
+    const error = new Error("Portfolio is unavailable");
+    error.name = "ConditionalCheckFailedException";
+    error.code = "PORTFOLIO_UNAVAILABLE";
+    throw error;
+  }
+}
+
+async function sendPortfolioTransaction(pk, portfolioId, transactItems) {
+  try {
+    await ddbDocClient.send(new TransactWriteCommand({
+      TransactItems: [portfolioAvailableCondition(pk, portfolioId), ...transactItems]
+    }));
+  } catch (error) {
+    const reasons = error?.CancellationReasons || error?.cancellationReasons;
+    if (error?.name === "TransactionCanceledException" && Array.isArray(reasons)) {
+      if (reasons[0]?.Code === "ConditionalCheckFailed") error.code = "PORTFOLIO_UNAVAILABLE";
+      else if (reasons.slice(1).some(reason => reason?.Code === "ConditionalCheckFailed")) error.code = "CHILD_WRITE_CONFLICT";
+    }
+    throw error;
   }
 }
 
@@ -42,11 +79,13 @@ async function putTransaction(userId, portfolioId, txn) {
   };
 
   if (isMock) {
+    assertMockPortfolioAvailable(pk, portfolioId);
     // Mimic DynamoDB conditional writes: do not allow overwriting an existing transaction with the same PK+SK.
     const exists = mockDb.some(i => i.PK === pk && i.SK === sk);
     if (exists) {
       const err = new Error("Transaction already exists for the given timestamp");
       err.name = "ConditionalCheckFailedException";
+      err.code = "CHILD_WRITE_CONFLICT";
       throw err;
     }
     mockDb.push(item);
@@ -57,11 +96,13 @@ async function putTransaction(userId, portfolioId, txn) {
     throw new Error("DynamoDB client is not initialized");
   }
 
-  await ddbDocClient.send(new PutCommand({
-    TableName: tableName,
-    Item: item,
-    ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)"
-  }));
+  await sendPortfolioTransaction(pk, portfolioId, [{
+    Put: {
+      TableName: tableName,
+      Item: item,
+      ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)"
+    }
+  }]);
   return item;
 }
 
@@ -132,6 +173,19 @@ async function getPortfolios(userId) {
     .sort((a, b) => a.SK.localeCompare(b.SK));
 }
 
+async function getPortfolio(userId, portfolioId) {
+  const pk = `USER#${userId}`;
+  const sk = `METADATA#PORTFOLIO#${portfolioId}`;
+  if (isMock) return mockDb.find(item => item.PK === pk && item.SK === sk) || null;
+  if (!ddbDocClient) throw new Error("DynamoDB client is not initialized");
+  const response = await ddbDocClient.send(new GetCommand({
+    TableName: tableName,
+    Key: { PK: pk, SK: sk },
+    ConsistentRead: true
+  }));
+  return response.Item || null;
+}
+
 /**
  * Saves a portfolio metadata item.
  * 
@@ -173,6 +227,41 @@ async function putPortfolio(userId, portfolio) {
   return item;
 }
 
+/** Marks a portfolio as deleting so transactional child creation can no longer succeed. */
+async function markPortfolioDeleting(userId, portfolioId) {
+  const pk = `USER#${userId}`;
+  const sk = `METADATA#PORTFOLIO#${portfolioId}`;
+  const portfolio = await getPortfolio(userId, portfolioId);
+  if (!portfolio || portfolio.deletionStatus === "DELETING") return portfolio;
+  const deletionStartedAt = new Date().toISOString();
+
+  if (isMock) {
+    portfolio.deletionStatus = "DELETING";
+    portfolio.deletionStartedAt = deletionStartedAt;
+    return portfolio;
+  }
+  try {
+    const response = await ddbDocClient.send(new UpdateCommand({
+      TableName: tableName,
+      Key: { PK: pk, SK: sk },
+      UpdateExpression: "SET #deletionStatus = :deleting, #deletionStartedAt = :startedAt",
+      ExpressionAttributeNames: {
+        "#deletionStatus": "deletionStatus",
+        "#deletionStartedAt": "deletionStartedAt"
+      },
+      ExpressionAttributeValues: { ":deleting": "DELETING", ":startedAt": deletionStartedAt },
+      ConditionExpression: "attribute_exists(PK) AND attribute_not_exists(#deletionStatus)",
+      ReturnValues: "ALL_NEW"
+    }));
+    return response.Attributes;
+  } catch (error) {
+    if (error?.name !== "ConditionalCheckFailedException") throw error;
+    const currentPortfolio = await getPortfolio(userId, portfolioId);
+    if (!currentPortfolio || currentPortfolio.deletionStatus === "DELETING") return currentPortfolio;
+    throw error;
+  }
+}
+
 /**
  * Deletes a portfolio metadata item and every record scoped to that portfolio.
  *
@@ -211,14 +300,15 @@ async function deletePortfolio(userId, portfolioId) {
       ":pk": pk,
       ":metadataSk": metadataSk
     },
-    ProjectionExpression: "PK, SK"
+    ProjectionExpression: "PK, SK",
+    ConsistentRead: true
   }));
   const metadata = metadataResponse.Items?.[0];
   if (!metadata) {
     return null;
   }
 
-  const records = [metadata];
+  const records = [];
   let exclusiveStartKey;
   do {
     const response = await ddbDocClient.send(new QueryCommand({
@@ -229,6 +319,7 @@ async function deletePortfolio(userId, portfolioId) {
         ":recordPrefix": recordPrefix
       },
       ProjectionExpression: "PK, SK",
+      ConsistentRead: true,
       ExclusiveStartKey: exclusiveStartKey
     }));
     records.push(...(response.Items || []));
@@ -255,7 +346,15 @@ async function deletePortfolio(userId, portfolioId) {
     }
   }
 
-  return { deletedCount: records.length };
+  await ddbDocClient.send(new DeleteCommand({
+    TableName: tableName,
+    Key: { PK: metadata.PK, SK: metadata.SK },
+    ConditionExpression: "#deletionStatus = :deleting",
+    ExpressionAttributeNames: { "#deletionStatus": "deletionStatus" },
+    ExpressionAttributeValues: { ":deleting": "DELETING" }
+  }));
+
+  return { deletedCount: records.length + 1 };
 }
 
 /**
@@ -312,6 +411,7 @@ async function updateTransaction(userId, portfolioId, oldTimestamp, newTxn) {
   };
 
   if (isMock) {
+    assertMockPortfolioAvailable(pk, portfolioId);
     const oldIdx = mockDb.findIndex(i => i.PK === pk && i.SK === oldSk);
     if (oldIdx === -1) {
       throw new Error("Original transaction not found");
@@ -323,6 +423,7 @@ async function updateTransaction(userId, portfolioId, oldTimestamp, newTxn) {
       if (newExists) {
         const err = new Error("Transaction already exists for the target timestamp");
         err.name = "ConditionalCheckFailedException";
+        err.code = "CHILD_WRITE_CONFLICT";
         throw err;
       }
       // Remove old and add new atomically in the mock database
@@ -340,29 +441,30 @@ async function updateTransaction(userId, portfolioId, oldTimestamp, newTxn) {
   }
 
   if (oldSk !== newSk) {
-    await ddbDocClient.send(new TransactWriteCommand({
-      TransactItems: [
-        {
-          Put: {
-            TableName: tableName,
-            Item: item,
-            ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)"
-          }
-        },
-        {
-          Delete: {
-            TableName: tableName,
-            Key: { PK: pk, SK: oldSk }
-          }
+    await sendPortfolioTransaction(pk, portfolioId, [
+      {
+        Put: {
+          TableName: tableName,
+          Item: item,
+          ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)"
         }
-      ]
-    }));
+      },
+      {
+        Delete: {
+          TableName: tableName,
+          Key: { PK: pk, SK: oldSk },
+          ConditionExpression: "attribute_exists(PK) AND attribute_exists(SK)"
+        }
+      }
+    ]);
   } else {
-    // Update/put directly
-    await ddbDocClient.send(new PutCommand({
-      TableName: tableName,
-      Item: item
-    }));
+    await sendPortfolioTransaction(pk, portfolioId, [{
+      Put: {
+        TableName: tableName,
+        Item: item,
+        ConditionExpression: "attribute_exists(PK) AND attribute_exists(SK)"
+      }
+    }]);
   }
 
   return item;
@@ -401,6 +503,7 @@ async function createAnalysisJob(userId, portfolioId) {
   };
 
   if (isMock) {
+    assertMockPortfolioAvailable(pk, portfolioId);
     mockDb.push(item);
     return item;
   }
@@ -409,11 +512,13 @@ async function createAnalysisJob(userId, portfolioId) {
     throw new Error("DynamoDB client is not initialized");
   }
 
-  await ddbDocClient.send(new PutCommand({
-    TableName: tableName,
-    Item: item,
-    ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)"
-  }));
+  await sendPortfolioTransaction(pk, portfolioId, [{
+    Put: {
+      TableName: tableName,
+      Item: item,
+      ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)"
+    }
+  }]);
 
   return item;
 }
@@ -502,11 +607,436 @@ async function updateAnalysisJob(userId, portfolioId, jobId, status, result = nu
   return response.Attributes;
 }
 
+/**
+ * Creates a new document import job for a portfolio.
+ * 
+ * @param {string} userId - Cognito User ID (sub)
+ * @param {string} portfolioId - Portfolio ID
+ * @param {object} sourceDocument - Uploaded document metadata retained with the job.
+ * @returns {Promise<object>} The created doc import job item.
+ */
+async function createDocImportJob(userId, portfolioId, sourceDocument = null, importId = crypto.randomUUID()) {
+  const pk = `USER#${userId}`;
+  const sk = `PORTFOLIO#${portfolioId}#DOC_IMPORT#${importId}`;
+  const createdAt = new Date().toISOString();
+  const item = {
+    PK: pk,
+    SK: sk,
+    GSI1PK: `USER#${userId}#DOC_IMPORT#${importId}`,
+    GSI1SK: `PORTFOLIO#${portfolioId}`,
+    GSI2PK: "DOC_IMPORT#UPLOADED",
+    GSI2SK: `${createdAt}#${importId}`,
+    importId,
+    portfolioId,
+    type: "document_import",
+    status: "UPLOADED",
+    sourceDocument,
+    extractedData: null,
+    createdAt
+  };
+
+  if (isMock) {
+    const portfolio = mockDb.find(candidate => candidate.PK === pk && candidate.SK === `METADATA#PORTFOLIO#${portfolioId}`);
+    if (!portfolio || portfolio.deletionStatus === "DELETING") {
+      const err = new Error("Portfolio is unavailable for document imports");
+      err.name = "TransactionCanceledException";
+      err.CancellationReasons = [{ Code: "ConditionalCheckFailed" }, { Code: "None" }];
+      throw err;
+    }
+    if (mockDb.some(candidate => candidate.PK === pk && candidate.SK === sk)) {
+      const err = new Error("Document import job already exists");
+      err.name = "TransactionCanceledException";
+      err.CancellationReasons = [{ Code: "None" }, { Code: "ConditionalCheckFailed" }];
+      throw err;
+    }
+    mockDb.push(item);
+    return item;
+  }
+
+  if (!ddbDocClient) {
+    throw new Error("DynamoDB client is not initialized");
+  }
+
+  await ddbDocClient.send(new TransactWriteCommand({
+    TransactItems: [
+      {
+        ConditionCheck: {
+          TableName: tableName,
+          Key: { PK: pk, SK: `METADATA#PORTFOLIO#${portfolioId}` },
+          ConditionExpression: "attribute_exists(PK) AND (attribute_not_exists(#deletionStatus) OR #deletionStatus <> :deleting)",
+          ExpressionAttributeNames: { "#deletionStatus": "deletionStatus" },
+          ExpressionAttributeValues: { ":deleting": "DELETING" }
+        }
+      },
+      {
+        Put: {
+          TableName: tableName,
+          Item: item,
+          ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)"
+        }
+      }
+    ]
+  }));
+
+  return item;
+}
+
+/**
+ * Retrieves a document import job by its importId for a user.
+ * 
+ * @param {string} userId - Cognito User ID (sub)
+ * @param {string} importId - Import Job ID (UUID)
+ * @returns {Promise<object|null>} The document import job item, or null if not found.
+ */
+async function getDocImportJob(userId, importId, portfolioId) {
+  if (portfolioId) {
+    const pk = `USER#${userId}`;
+    const sk = `PORTFOLIO#${portfolioId}#DOC_IMPORT#${importId}`;
+    if (isMock) return mockDb.find(item => item.PK === pk && item.SK === sk) || null;
+    if (!ddbDocClient) throw new Error("DynamoDB client is not initialized");
+    const response = await ddbDocClient.send(new GetCommand({
+      TableName: tableName,
+      Key: { PK: pk, SK: sk },
+      ConsistentRead: true
+    }));
+    return response.Item || null;
+  }
+
+  const gsi1pk = `USER#${userId}#DOC_IMPORT#${importId}`;
+
+  if (isMock) {
+    return mockDb.find(i => i.GSI1PK === gsi1pk || (i.PK === `USER#${userId}` && i.SK && i.SK.endsWith(`#DOC_IMPORT#${importId}`))) || null;
+  }
+
+  if (!ddbDocClient) {
+    throw new Error("DynamoDB client is not initialized");
+  }
+
+  const response = await ddbDocClient.send(new QueryCommand({
+    TableName: tableName,
+    IndexName: "GSI1",
+    KeyConditionExpression: "GSI1PK = :gsi1pk",
+    ExpressionAttributeValues: {
+      ":gsi1pk": gsi1pk
+    },
+    Limit: 1
+  }));
+
+  return response.Items?.[0] || null;
+}
+
+/** Finds stale uploaded jobs through the sparse dispatch index. */
+async function getStaleUploadedDocImports(cutoffIso, maxJobs = 25) {
+  const toDispatchMessage = item => ({
+    userId: item.PK.slice("USER#".length),
+    portfolioId: item.portfolioId,
+    importId: item.importId,
+    dispatchIndexKey: item.GSI2SK
+  });
+  const isStaleUpload = item => item.GSI2PK === "DOC_IMPORT#UPLOADED"
+    && typeof item.GSI2SK === "string"
+    && item.GSI2SK <= `${cutoffIso}#\uffff`;
+
+  if (isMock) return mockDb.filter(isStaleUpload).slice(0, maxJobs).map(toDispatchMessage);
+  if (!ddbDocClient) throw new Error("DynamoDB client is not initialized");
+
+  const response = await ddbDocClient.send(new QueryCommand({
+    TableName: tableName,
+    IndexName: "GSI2",
+    KeyConditionExpression: "GSI2PK = :uploaded AND GSI2SK <= :cutoff",
+    ExpressionAttributeValues: { ":uploaded": "DOC_IMPORT#UPLOADED", ":cutoff": `${cutoffIso}#\uffff` },
+    ProjectionExpression: "PK, SK, portfolioId, importId, GSI2SK",
+    Limit: maxJobs
+  }));
+  return (response.Items || []).map(toDispatchMessage);
+}
+
+/** Acquires a dispatch lease so overlapping schedulers cannot repeatedly enqueue the same job. */
+async function claimDocImportDispatch(job, dispatchedAtIso) {
+  const pk = `USER#${job.userId}`;
+  const sk = `PORTFOLIO#${job.portfolioId}#DOC_IMPORT#${job.importId}`;
+  const nextIndexKey = `${dispatchedAtIso}#${job.importId}`;
+  if (isMock) {
+    const item = mockDb.find(candidate => candidate.PK === pk && candidate.SK === sk);
+    if (!item || item.status !== "UPLOADED" || item.GSI2SK !== job.dispatchIndexKey) return false;
+    item.GSI2SK = nextIndexKey;
+    item.lastDispatchedAt = dispatchedAtIso;
+    return true;
+  }
+  if (!ddbDocClient) throw new Error("DynamoDB client is not initialized");
+
+  try {
+    await ddbDocClient.send(new UpdateCommand({
+      TableName: tableName,
+      Key: { PK: pk, SK: sk },
+      UpdateExpression: "SET GSI2SK = :nextIndexKey, #lastDispatchedAt = :dispatchedAt",
+      ConditionExpression: "#status = :uploaded AND GSI2SK = :expectedIndexKey",
+      ExpressionAttributeNames: { "#status": "status", "#lastDispatchedAt": "lastDispatchedAt" },
+      ExpressionAttributeValues: {
+        ":uploaded": "UPLOADED",
+        ":expectedIndexKey": job.dispatchIndexKey,
+        ":nextIndexKey": nextIndexKey,
+        ":dispatchedAt": dispatchedAtIso
+      }
+    }));
+    return true;
+  } catch (error) {
+    if (error?.name === "ConditionalCheckFailedException") return false;
+    throw error;
+  }
+}
+
+/**
+ * Updates status, extractedData, and error of an existing document import job.
+ * 
+ * @param {string} userId - Cognito User ID (sub)
+ * @param {string} portfolioId - Portfolio ID
+ * @param {string} importId - Import Job ID (UUID)
+ * @param {string} status - New job status ("PROCESSING" | "RETRYING" | "READY_FOR_REVIEW" | "FAILED")
+ * @param {Array|object|null} extractedData - Extracted holdings payload
+ * @param {string|null} error - Error message
+ * @returns {Promise<object>} The updated job item attributes.
+ */
+async function updateDocImportJob(userId, portfolioId, importId, status, extractedData = null, error = null) {
+  const pk = `USER#${userId}`;
+  const sk = `PORTFOLIO#${portfolioId}#DOC_IMPORT#${importId}`;
+  const expectedStatuses = {
+    PROCESSING: ["UPLOADED", "PROCESSING", "RETRYING"],
+    RETRYING: ["UPLOADED", "PROCESSING", "RETRYING"],
+    READY_FOR_REVIEW: ["PROCESSING"],
+    FAILED: ["UPLOADED", "PROCESSING", "RETRYING"]
+  }[status];
+  if (!expectedStatuses) throw new Error(`Unsupported document import status transition: ${status}`);
+
+  if (isMock) {
+    const item = mockDb.find(i => i.PK === pk && i.SK === sk);
+    if (!item) {
+      throw new Error("Document import job not found");
+    }
+    if (!expectedStatuses.includes(item.status)) {
+      const err = new Error(`Cannot transition document import from ${item.status} to ${status}`);
+      err.name = "ConditionalCheckFailedException";
+      throw err;
+    }
+    item.status = status;
+    delete item.GSI2PK;
+    delete item.GSI2SK;
+    item.extractedData = extractedData;
+    item.error = error;
+    item.updatedAt = new Date().toISOString();
+    return item;
+  }
+
+  if (!ddbDocClient) {
+    throw new Error("DynamoDB client is not initialized");
+  }
+
+  const expectedStatusValues = Object.fromEntries(expectedStatuses.map((value, index) => [`:expectedStatus${index}`, value]));
+  const response = await ddbDocClient.send(new UpdateCommand({
+    TableName: tableName,
+    Key: { PK: pk, SK: sk },
+    UpdateExpression: "SET #status = :status, #extractedData = :extractedData, #error = :error, #updatedAt = :updatedAt REMOVE GSI2PK, GSI2SK",
+    ExpressionAttributeNames: {
+      "#status": "status",
+      "#extractedData": "extractedData",
+      "#error": "error",
+      "#updatedAt": "updatedAt"
+    },
+    ExpressionAttributeValues: {
+      ":status": status,
+      ":extractedData": extractedData,
+      ":error": error,
+      ":updatedAt": new Date().toISOString(),
+      ...expectedStatusValues
+    },
+    ConditionExpression: `attribute_exists(PK) AND #status IN (${Object.keys(expectedStatusValues).join(", ")})`,
+    ReturnValues: "ALL_NEW"
+  }));
+
+  return response.Attributes;
+}
+
+/**
+ * Atomically saves extracted holdings as portfolio transactions and completes an import job.
+ * DynamoDB transactions support at most 100 operations, leaving room for 98 holdings,
+ * the portfolio condition check, and the job update.
+ */
+async function confirmDocImport(userId, job) {
+  const holdings = new Map();
+  for (const [index, asset] of (Array.isArray(job.extractedData) ? job.extractedData : []).entries()) {
+    const ticker = typeof asset?.ticker === "string" ? asset.ticker.trim().toUpperCase() : "";
+    const hasQuantity = asset?.quantity !== null && asset?.quantity !== undefined && String(asset.quantity).trim() !== "";
+    const hasCostBasis = asset?.costBasis !== null && asset?.costBasis !== undefined && String(asset.costBasis).trim() !== "";
+    const quantity = Number(asset?.quantity);
+    const costBasis = Number(asset?.costBasis);
+    if (!ticker || !hasQuantity || !hasCostBasis || !Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(costBasis) || costBasis < 0) {
+      const err = new Error(`Extracted holding ${index + 1} has invalid ticker, quantity, or cost basis`);
+      err.code = "INVALID_IMPORT_ASSETS";
+      throw err;
+    }
+    const current = holdings.get(ticker) || { ticker, quantity: 0, costBasis: 0 };
+    current.quantity += quantity;
+    current.costBasis += costBasis;
+    if (!Number.isFinite(current.quantity) || !Number.isFinite(current.costBasis)) {
+      const err = new Error(`Extracted holdings for ${ticker} exceed supported numeric limits after aggregation`);
+      err.code = "INVALID_IMPORT_ASSETS";
+      throw err;
+    }
+    holdings.set(ticker, current);
+  }
+
+  if (holdings.size === 0) {
+    const err = new Error("Cannot confirm document import without extracted holdings");
+    err.code = "INVALID_IMPORT_ASSETS";
+    throw err;
+  }
+  if (holdings.size > 98) {
+    const err = new Error("Document import contains too many assets to confirm atomically");
+    err.code = "TOO_MANY_IMPORT_ASSETS";
+    throw err;
+  }
+
+  const pk = `USER#${userId}`;
+  const now = new Date().toISOString();
+  const baseTimestamp = Date.now();
+  const transactionItems = [...holdings.values()].map((holding, index) => {
+    const timestamp = new Date(baseTimestamp + index).toISOString();
+    const averageCost = holding.costBasis / holding.quantity;
+    if (!Number.isFinite(averageCost)) {
+      const err = new Error(`Extracted holdings for ${holding.ticker} produce an invalid average cost`);
+      err.code = "INVALID_IMPORT_ASSETS";
+      throw err;
+    }
+    return {
+      PK: pk,
+      SK: `PORTFOLIO#${job.portfolioId}#TXN#${timestamp}`,
+      portfolioId: job.portfolioId,
+      type: "transfer_in",
+      ticker: holding.ticker,
+      quantity: holding.quantity,
+      price: averageCost,
+      amount: holding.costBasis,
+      costBasis: holding.costBasis,
+      timestamp,
+      sourceImportId: job.importId,
+      createdAt: now
+    };
+  });
+
+  if (isMock) {
+    const portfolioItem = mockDb.find(item => item.PK === pk && item.SK === `METADATA#PORTFOLIO#${job.portfolioId}`);
+    if (!portfolioItem || portfolioItem.deletionStatus === "DELETING") {
+      const err = new Error("Portfolio is unavailable for import confirmation");
+      err.name = "TransactionCanceledException";
+      err.code = "PORTFOLIO_UNAVAILABLE";
+      throw err;
+    }
+    const jobItem = mockDb.find(item => item.PK === pk && item.SK === job.SK);
+    if (!jobItem || jobItem.status !== "READY_FOR_REVIEW") {
+      const err = new Error("Document import is no longer ready for confirmation");
+      err.name = "ConditionalCheckFailedException";
+      err.code = "IMPORT_NOT_READY";
+      throw err;
+    }
+
+    if (transactionItems.some(item => mockDb.some(existing => existing.PK === item.PK && existing.SK === item.SK))) {
+      const err = new Error("An imported transaction already exists at the generated timestamp");
+      err.name = "ConditionalCheckFailedException";
+      err.code = "IMPORT_TRANSACTION_CONFLICT";
+      throw err;
+    }
+    mockDb.push(...transactionItems);
+    jobItem.status = "COMPLETED";
+    jobItem.error = null;
+    jobItem.updatedAt = now;
+    return { job: jobItem, savedTransactions: transactionItems };
+  }
+
+  if (!ddbDocClient) {
+    throw new Error("DynamoDB client is not initialized");
+  }
+
+  await ddbDocClient.send(new TransactWriteCommand({
+    TransactItems: [
+      {
+        ConditionCheck: {
+          TableName: tableName,
+          Key: { PK: pk, SK: `METADATA#PORTFOLIO#${job.portfolioId}` },
+          ExpressionAttributeNames: { "#deletionStatus": "deletionStatus" },
+          ExpressionAttributeValues: { ":deleting": "DELETING" },
+          ConditionExpression: "attribute_exists(PK) AND (attribute_not_exists(#deletionStatus) OR #deletionStatus <> :deleting)"
+        }
+      },
+      ...transactionItems.map(Item => ({
+        Put: {
+          TableName: tableName,
+          Item,
+          ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)"
+        }
+      })),
+      {
+        Update: {
+          TableName: tableName,
+          Key: { PK: pk, SK: job.SK },
+          UpdateExpression: "SET #status = :completed, #error = :error, #updatedAt = :updatedAt",
+          ExpressionAttributeNames: {
+            "#status": "status",
+            "#error": "error",
+            "#updatedAt": "updatedAt"
+          },
+          ExpressionAttributeValues: {
+            ":completed": "COMPLETED",
+            ":ready": "READY_FOR_REVIEW",
+            ":error": null,
+            ":updatedAt": now
+          },
+          ConditionExpression: "#status = :ready"
+        }
+      }
+    ]
+  }));
+
+  return {
+    job: { ...job, status: "COMPLETED", error: null, updatedAt: now },
+    savedTransactions: transactionItems
+  };
+}
+
+/** Returns stored document pointers for import jobs owned by one portfolio. */
+async function getPortfolioDocumentSources(userId, portfolioId) {
+  const pk = `USER#${userId}`;
+  const skPrefix = `PORTFOLIO#${portfolioId}#DOC_IMPORT#`;
+  if (isMock) {
+    return mockDb
+      .filter(item => item.PK === pk && item.SK.startsWith(skPrefix) && item.sourceDocument)
+      .map(item => item.sourceDocument);
+  }
+  if (!ddbDocClient) throw new Error("DynamoDB client is not initialized");
+
+  const sourceDocuments = [];
+  let exclusiveStartKey;
+  do {
+    const response = await ddbDocClient.send(new QueryCommand({
+      TableName: tableName,
+      KeyConditionExpression: "PK = :pk AND begins_with(SK, :skPrefix)",
+      ExpressionAttributeValues: { ":pk": pk, ":skPrefix": skPrefix },
+      ProjectionExpression: "sourceDocument",
+      ConsistentRead: true,
+      ExclusiveStartKey: exclusiveStartKey
+    }));
+    sourceDocuments.push(...(response.Items || []).map(item => item.sourceDocument).filter(Boolean));
+    exclusiveStartKey = response.LastEvaluatedKey;
+  } while (exclusiveStartKey);
+  return sourceDocuments;
+}
+
 module.exports = {
   putTransaction,
   getTransactions,
   getPortfolios,
+  getPortfolio,
   putPortfolio,
+  markPortfolioDeleting,
   deletePortfolio,
   deleteTransaction,
   updateTransaction,
@@ -514,5 +1044,12 @@ module.exports = {
   createAnalysisJob,
   getAnalysisJob,
   updateAnalysisJob,
+  createDocImportJob,
+  getDocImportJob,
+  getStaleUploadedDocImports,
+  claimDocImportDispatch,
+  updateDocImportJob,
+  confirmDocImport,
+  getPortfolioDocumentSources,
   isMock
 };
