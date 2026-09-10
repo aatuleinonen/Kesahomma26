@@ -317,6 +317,21 @@ const server = app.listen(PORT, async () => {
       throw new Error(`Expected 400 for malformed extracted numeric values, got ${invalidConfirm.status}`);
     }
     console.log("  PASS: Malformed extracted numeric values cannot be confirmed");
+
+    const overflowImport = await createDocImportJob("dev-user-12345-uuid-67890", portfolioId);
+    await updateDocImportJob("dev-user-12345-uuid-67890", portfolioId, overflowImport.importId, "PROCESSING", null, null);
+    await updateDocImportJob("dev-user-12345-uuid-67890", portfolioId, overflowImport.importId, "READY_FOR_REVIEW", [
+      { ticker: "BIG", quantity: 1, costBasis: 1e308 },
+      { ticker: "BIG", quantity: 1, costBasis: 1e308 }
+    ], null);
+    const overflowConfirm = await fetch(`http://localhost:${PORT}/api/portfolios/${portfolioId}/upload/${overflowImport.importId}/confirm`, {
+      method: "POST",
+      headers: { "Authorization": "Bearer dummy-token" }
+    });
+    if (overflowConfirm.status !== 400) {
+      throw new Error(`Expected 400 when aggregated extracted values overflow, got ${overflowConfirm.status}`);
+    }
+    console.log("  PASS: Aggregate overflow is rejected before transaction construction");
     const finalAttemptResult = await documentWorkerHandler({ Records: [{
       messageId: "final-read-attempt",
       body: JSON.stringify({ userId: "dev-user-12345-uuid-67890", portfolioId, importId: unreadableImport.importId }),

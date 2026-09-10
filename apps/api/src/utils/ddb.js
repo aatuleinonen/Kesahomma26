@@ -869,6 +869,11 @@ async function confirmDocImport(userId, job) {
     const current = holdings.get(ticker) || { ticker, quantity: 0, costBasis: 0 };
     current.quantity += quantity;
     current.costBasis += costBasis;
+    if (!Number.isFinite(current.quantity) || !Number.isFinite(current.costBasis)) {
+      const err = new Error(`Extracted holdings for ${ticker} exceed supported numeric limits after aggregation`);
+      err.code = "INVALID_IMPORT_ASSETS";
+      throw err;
+    }
     holdings.set(ticker, current);
   }
 
@@ -888,6 +893,12 @@ async function confirmDocImport(userId, job) {
   const baseTimestamp = Date.now();
   const transactionItems = [...holdings.values()].map((holding, index) => {
     const timestamp = new Date(baseTimestamp + index).toISOString();
+    const averageCost = holding.costBasis / holding.quantity;
+    if (!Number.isFinite(averageCost)) {
+      const err = new Error(`Extracted holdings for ${holding.ticker} produce an invalid average cost`);
+      err.code = "INVALID_IMPORT_ASSETS";
+      throw err;
+    }
     return {
       PK: pk,
       SK: `PORTFOLIO#${job.portfolioId}#TXN#${timestamp}`,
@@ -895,7 +906,7 @@ async function confirmDocImport(userId, job) {
       type: "transfer_in",
       ticker: holding.ticker,
       quantity: holding.quantity,
-      price: holding.costBasis / holding.quantity,
+      price: averageCost,
       amount: holding.costBasis,
       costBasis: holding.costBasis,
       timestamp,

@@ -107,7 +107,7 @@ export default function PortfolioDashboard({ signOut, user }) {
       let amount = parseFloat(t.amount);
       if (isNaN(amount)) amount = quantity * price;
 
-      if (type === 'buy') {
+      if (type === 'buy' || type === 'transfer_in') {
         if (!metrics[ticker]) {
           metrics[ticker] = { quantity: 0, totalCost: 0, averageCost: 0 };
         }
