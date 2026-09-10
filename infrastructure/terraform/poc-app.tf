@@ -49,6 +49,15 @@ resource "aws_iam_role_policy" "api_lambda" {
     Version = "2012-10-17"
     Statement = [
       {
+        Sid    = "ManageDocumentImports"
+        Effect = "Allow"
+        Action = [
+          "s3:DeleteObject",
+          "s3:PutObject"
+        ]
+        Resource = "${aws_s3_bucket.document_imports.arn}/*"
+      },
+      {
         Sid    = "WriteFunctionLogs"
         Effect = "Allow"
         Action = [
@@ -67,6 +76,7 @@ resource "aws_iam_role_policy" "api_lambda" {
           "dynamodb:GetItem",
           "dynamodb:PutItem",
           "dynamodb:Query",
+          "dynamodb:TransactWriteItems",
           "dynamodb:UpdateItem"
         ]
         Resource = [
@@ -108,11 +118,12 @@ resource "aws_lambda_function" "api" {
 
   environment {
     variables = {
-      COGNITO_CLIENT_ID    = aws_cognito_user_pool_client.user_pool_client.id
-      COGNITO_USER_POOL_ID = aws_cognito_user_pool.user_pool.id
-      DYNAMODB_TABLE_NAME  = aws_dynamodb_table.single_table.name
-      ENABLE_AI_ANALYSIS   = "false"
-      NODE_ENV             = "production"
+      COGNITO_CLIENT_ID      = aws_cognito_user_pool_client.user_pool_client.id
+      COGNITO_USER_POOL_ID   = aws_cognito_user_pool.user_pool.id
+      DYNAMODB_TABLE_NAME    = aws_dynamodb_table.single_table.name
+      DOCUMENT_IMPORT_BUCKET = aws_s3_bucket.document_imports.id
+      ENABLE_AI_ANALYSIS     = "false"
+      NODE_ENV               = "production"
     }
   }
 
@@ -131,6 +142,68 @@ resource "aws_lambda_function" "api" {
     aws_cloudwatch_log_group.api_lambda,
     aws_iam_role_policy.api_lambda
   ]
+}
+
+resource "aws_s3_bucket" "document_imports" {
+  bucket = "${local.resource_prefix}-document-imports-${data.aws_caller_identity.current.account_id}"
+}
+
+resource "aws_s3_bucket_ownership_controls" "document_imports" {
+  bucket = aws_s3_bucket.document_imports.id
+  rule {
+    object_ownership = "BucketOwnerEnforced"
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "document_imports" {
+  bucket                  = aws_s3_bucket.document_imports.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_policy" "document_imports" {
+  bucket = aws_s3_bucket.document_imports.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "DenyInsecureTransport"
+      Effect    = "Deny"
+      Principal = "*"
+      Action    = "s3:*"
+      Resource = [
+        aws_s3_bucket.document_imports.arn,
+        "${aws_s3_bucket.document_imports.arn}/*"
+      ]
+      Condition = {
+        Bool = {
+          "aws:SecureTransport" = "false"
+        }
+      }
+    }]
+  })
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "document_imports" {
+  bucket = aws_s3_bucket.document_imports.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "document_imports" {
+  bucket = aws_s3_bucket.document_imports.id
+  rule {
+    id     = "expire-imports"
+    status = "Enabled"
+    expiration {
+      days = 7
+    }
+  }
 }
 
 resource "aws_apigatewayv2_api" "poc" {

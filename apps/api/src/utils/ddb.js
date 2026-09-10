@@ -1,6 +1,6 @@
 const crypto = require("crypto");
 const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
-const { DynamoDBDocumentClient, PutCommand, QueryCommand, DeleteCommand, TransactWriteCommand, UpdateCommand, BatchWriteCommand } = require("@aws-sdk/lib-dynamodb");
+const { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, DeleteCommand, TransactWriteCommand, UpdateCommand, BatchWriteCommand } = require("@aws-sdk/lib-dynamodb");
 
 const tableName = process.env.DYNAMODB_TABLE_NAME || "kesahomma26-data";
 
@@ -132,6 +132,19 @@ async function getPortfolios(userId) {
     .sort((a, b) => a.SK.localeCompare(b.SK));
 }
 
+async function getPortfolio(userId, portfolioId) {
+  const pk = `USER#${userId}`;
+  const sk = `METADATA#PORTFOLIO#${portfolioId}`;
+  if (isMock) return mockDb.find(item => item.PK === pk && item.SK === sk) || null;
+  if (!ddbDocClient) throw new Error("DynamoDB client is not initialized");
+  const response = await ddbDocClient.send(new GetCommand({
+    TableName: tableName,
+    Key: { PK: pk, SK: sk },
+    ConsistentRead: true
+  }));
+  return response.Item || null;
+}
+
 /**
  * Saves a portfolio metadata item.
  * 
@@ -173,6 +186,41 @@ async function putPortfolio(userId, portfolio) {
   return item;
 }
 
+/** Marks a portfolio as deleting so transactional child creation can no longer succeed. */
+async function markPortfolioDeleting(userId, portfolioId) {
+  const pk = `USER#${userId}`;
+  const sk = `METADATA#PORTFOLIO#${portfolioId}`;
+  const portfolio = await getPortfolio(userId, portfolioId);
+  if (!portfolio || portfolio.deletionStatus === "DELETING") return portfolio;
+  const deletionStartedAt = new Date().toISOString();
+
+  if (isMock) {
+    portfolio.deletionStatus = "DELETING";
+    portfolio.deletionStartedAt = deletionStartedAt;
+    return portfolio;
+  }
+  try {
+    const response = await ddbDocClient.send(new UpdateCommand({
+      TableName: tableName,
+      Key: { PK: pk, SK: sk },
+      UpdateExpression: "SET #deletionStatus = :deleting, #deletionStartedAt = :startedAt",
+      ExpressionAttributeNames: {
+        "#deletionStatus": "deletionStatus",
+        "#deletionStartedAt": "deletionStartedAt"
+      },
+      ExpressionAttributeValues: { ":deleting": "DELETING", ":startedAt": deletionStartedAt },
+      ConditionExpression: "attribute_exists(PK) AND attribute_not_exists(#deletionStatus)",
+      ReturnValues: "ALL_NEW"
+    }));
+    return response.Attributes;
+  } catch (error) {
+    if (error?.name !== "ConditionalCheckFailedException") throw error;
+    const currentPortfolio = await getPortfolio(userId, portfolioId);
+    if (!currentPortfolio || currentPortfolio.deletionStatus === "DELETING") return currentPortfolio;
+    throw error;
+  }
+}
+
 /**
  * Deletes a portfolio metadata item and every record scoped to that portfolio.
  *
@@ -211,14 +259,15 @@ async function deletePortfolio(userId, portfolioId) {
       ":pk": pk,
       ":metadataSk": metadataSk
     },
-    ProjectionExpression: "PK, SK"
+    ProjectionExpression: "PK, SK",
+    ConsistentRead: true
   }));
   const metadata = metadataResponse.Items?.[0];
   if (!metadata) {
     return null;
   }
 
-  const records = [metadata];
+  const records = [];
   let exclusiveStartKey;
   do {
     const response = await ddbDocClient.send(new QueryCommand({
@@ -229,6 +278,7 @@ async function deletePortfolio(userId, portfolioId) {
         ":recordPrefix": recordPrefix
       },
       ProjectionExpression: "PK, SK",
+      ConsistentRead: true,
       ExclusiveStartKey: exclusiveStartKey
     }));
     records.push(...(response.Items || []));
@@ -255,7 +305,15 @@ async function deletePortfolio(userId, portfolioId) {
     }
   }
 
-  return { deletedCount: records.length };
+  await ddbDocClient.send(new DeleteCommand({
+    TableName: tableName,
+    Key: { PK: metadata.PK, SK: metadata.SK },
+    ConditionExpression: "#deletionStatus = :deleting",
+    ExpressionAttributeNames: { "#deletionStatus": "deletionStatus" },
+    ExpressionAttributeValues: { ":deleting": "DELETING" }
+  }));
+
+  return { deletedCount: records.length + 1 };
 }
 
 /**
@@ -502,11 +560,156 @@ async function updateAnalysisJob(userId, portfolioId, jobId, status, result = nu
   return response.Attributes;
 }
 
+/**
+ * Creates a new document import job for a portfolio.
+ * 
+ * @param {string} userId - Cognito User ID (sub)
+ * @param {string} portfolioId - Portfolio ID
+ * @param {object} sourceDocument - Uploaded document metadata retained with the job.
+ * @returns {Promise<object>} The created doc import job item.
+ */
+async function createDocImportJob(userId, portfolioId, sourceDocument = null, importId = crypto.randomUUID()) {
+  const pk = `USER#${userId}`;
+  const sk = `PORTFOLIO#${portfolioId}#DOC_IMPORT#${importId}`;
+  const item = {
+    PK: pk,
+    SK: sk,
+    GSI1PK: `USER#${userId}#DOC_IMPORT#${importId}`,
+    GSI1SK: `PORTFOLIO#${portfolioId}`,
+    importId,
+    portfolioId,
+    type: "document_import",
+    status: "UPLOADED",
+    sourceDocument,
+    extractedData: null,
+    createdAt: new Date().toISOString()
+  };
+
+  if (isMock) {
+    const portfolio = mockDb.find(candidate => candidate.PK === pk && candidate.SK === `METADATA#PORTFOLIO#${portfolioId}`);
+    if (!portfolio || portfolio.deletionStatus === "DELETING") {
+      const err = new Error("Portfolio is unavailable for document imports");
+      err.name = "TransactionCanceledException";
+      err.CancellationReasons = [{ Code: "ConditionalCheckFailed" }, { Code: "None" }];
+      throw err;
+    }
+    if (mockDb.some(candidate => candidate.PK === pk && candidate.SK === sk)) {
+      const err = new Error("Document import job already exists");
+      err.name = "TransactionCanceledException";
+      err.CancellationReasons = [{ Code: "None" }, { Code: "ConditionalCheckFailed" }];
+      throw err;
+    }
+    mockDb.push(item);
+    return item;
+  }
+
+  if (!ddbDocClient) {
+    throw new Error("DynamoDB client is not initialized");
+  }
+
+  await ddbDocClient.send(new TransactWriteCommand({
+    TransactItems: [
+      {
+        ConditionCheck: {
+          TableName: tableName,
+          Key: { PK: pk, SK: `METADATA#PORTFOLIO#${portfolioId}` },
+          ConditionExpression: "attribute_exists(PK) AND (attribute_not_exists(#deletionStatus) OR #deletionStatus <> :deleting)",
+          ExpressionAttributeNames: { "#deletionStatus": "deletionStatus" },
+          ExpressionAttributeValues: { ":deleting": "DELETING" }
+        }
+      },
+      {
+        Put: {
+          TableName: tableName,
+          Item: item,
+          ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)"
+        }
+      }
+    ]
+  }));
+
+  return item;
+}
+
+/**
+ * Retrieves a document import job by its importId for a user.
+ * 
+ * @param {string} userId - Cognito User ID (sub)
+ * @param {string} importId - Import Job ID (UUID)
+ * @returns {Promise<object|null>} The document import job item, or null if not found.
+ */
+async function getDocImportJob(userId, importId, portfolioId) {
+  if (portfolioId) {
+    const pk = `USER#${userId}`;
+    const sk = `PORTFOLIO#${portfolioId}#DOC_IMPORT#${importId}`;
+    if (isMock) return mockDb.find(item => item.PK === pk && item.SK === sk) || null;
+    if (!ddbDocClient) throw new Error("DynamoDB client is not initialized");
+    const response = await ddbDocClient.send(new GetCommand({
+      TableName: tableName,
+      Key: { PK: pk, SK: sk },
+      ConsistentRead: true
+    }));
+    return response.Item || null;
+  }
+
+  const gsi1pk = `USER#${userId}#DOC_IMPORT#${importId}`;
+
+  if (isMock) {
+    return mockDb.find(i => i.GSI1PK === gsi1pk || (i.PK === `USER#${userId}` && i.SK && i.SK.endsWith(`#DOC_IMPORT#${importId}`))) || null;
+  }
+
+  if (!ddbDocClient) {
+    throw new Error("DynamoDB client is not initialized");
+  }
+
+  const response = await ddbDocClient.send(new QueryCommand({
+    TableName: tableName,
+    IndexName: "GSI1",
+    KeyConditionExpression: "GSI1PK = :gsi1pk",
+    ExpressionAttributeValues: {
+      ":gsi1pk": gsi1pk
+    },
+    Limit: 1
+  }));
+
+  return response.Items?.[0] || null;
+}
+
+/** Returns stored document pointers for import jobs owned by one portfolio. */
+async function getPortfolioDocumentSources(userId, portfolioId) {
+  const pk = `USER#${userId}`;
+  const skPrefix = `PORTFOLIO#${portfolioId}#DOC_IMPORT#`;
+  if (isMock) {
+    return mockDb
+      .filter(item => item.PK === pk && item.SK.startsWith(skPrefix) && item.sourceDocument)
+      .map(item => item.sourceDocument);
+  }
+  if (!ddbDocClient) throw new Error("DynamoDB client is not initialized");
+
+  const sourceDocuments = [];
+  let exclusiveStartKey;
+  do {
+    const response = await ddbDocClient.send(new QueryCommand({
+      TableName: tableName,
+      KeyConditionExpression: "PK = :pk AND begins_with(SK, :skPrefix)",
+      ExpressionAttributeValues: { ":pk": pk, ":skPrefix": skPrefix },
+      ProjectionExpression: "sourceDocument",
+      ConsistentRead: true,
+      ExclusiveStartKey: exclusiveStartKey
+    }));
+    sourceDocuments.push(...(response.Items || []).map(item => item.sourceDocument).filter(Boolean));
+    exclusiveStartKey = response.LastEvaluatedKey;
+  } while (exclusiveStartKey);
+  return sourceDocuments;
+}
+
 module.exports = {
   putTransaction,
   getTransactions,
   getPortfolios,
+  getPortfolio,
   putPortfolio,
+  markPortfolioDeleting,
   deletePortfolio,
   deleteTransaction,
   updateTransaction,
@@ -514,5 +717,8 @@ module.exports = {
   createAnalysisJob,
   getAnalysisJob,
   updateAnalysisJob,
+  createDocImportJob,
+  getDocImportJob,
+  getPortfolioDocumentSources,
   isMock
 };
