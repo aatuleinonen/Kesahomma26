@@ -1,15 +1,56 @@
 require("dotenv").config();
+const crypto = require("crypto");
+const path = require("path");
 const express = require("express");
+const multer = require("multer");
 const { authMiddleware } = require("./middleware/auth");
 const { auditMiddleware, logEvent } = require("./utils/logger");
 const { getUserId, buildIsolatedQueryParams } = require("./utils/db");
-const { putTransaction, getTransactions, getPortfolios, putPortfolio, deletePortfolio, deleteTransaction, updateTransaction, createAnalysisJob, getAnalysisJob, updateAnalysisJob } = require("./utils/ddb");
+const { putTransaction, getTransactions, getPortfolios, getPortfolio, getPortfolioDocumentSources, markPortfolioDeleting, putPortfolio, deletePortfolio, deleteTransaction, updateTransaction, createAnalysisJob, getAnalysisJob, updateAnalysisJob, createDocImportJob, getDocImportJob, updateDocImportJob } = require("./utils/ddb");
+const { deleteDocument, deleteDocuments, storeDocument } = require("./utils/documentStorage");
+const { enqueueDocumentImport } = require("./utils/documentQueue");
 const { validateNewTransaction, calculatePortfolioState, validateTransactionsState } = require("./utils/transactions");
+const { validateUploadContent } = require("./utils/uploadValidation");
 
 
 const app = express();
 app.use(auditMiddleware);
 app.use(express.json({ limit: "100kb" }));
+
+const lambdaProxyUploadLimitBytes = 4 * 1024 * 1024;
+const configuredUploadLimitBytes = Number.parseInt(process.env.DOCUMENT_UPLOAD_MAX_BYTES, 10);
+const maxUploadSizeBytes = Number.isSafeInteger(configuredUploadLimitBytes) && configuredUploadLimitBytes > 0
+  ? Math.min(configuredUploadLimitBytes, lambdaProxyUploadLimitBytes)
+  : lambdaProxyUploadLimitBytes;
+
+function normalizeUploadFilename(originalName) {
+  const sanitized = String(originalName || "document").replace(/[\\/\x00-\x1F]/g, "_");
+  const extension = path.extname(sanitized);
+  const basename = sanitized.slice(0, sanitized.length - extension.length);
+  return `${basename.slice(0, Math.max(1, 255 - extension.length))}${extension}` || "document";
+}
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    // Busboy signals its limit when the boundary is reached, so allow one sentinel byte
+    // and enforce the inclusive application limit below.
+    fileSize: maxUploadSizeBytes + 1,
+    files: 1
+  },
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname || "").toLowerCase();
+    const allowedCsvMimeTypes = ["text/csv", "application/csv", "text/plain", "application/vnd.ms-excel", "application/octet-stream"];
+    if (ext === ".csv" && allowedCsvMimeTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      const err = new Error("Invalid file type. Only UTF-8 CSV documents are supported.");
+      err.code = "INVALID_FILE_EXTENSION";
+      cb(err);
+    }
+  }
+});
+
 
 const analysisEnabled = process.env.ENABLE_AI_ANALYSIS === "true";
 
@@ -259,13 +300,16 @@ app.delete("/api/portfolios/:portfolioId", authMiddleware, async (req, res) => {
   try {
     const userId = getUserId(req);
     const { portfolioId } = req.params;
+    const portfolio = await markPortfolioDeleting(userId, portfolioId);
+    if (!portfolio) {
+      return res.status(404).json({ status: "error", message: "Portfolio not found" });
+    }
+    const sourceDocuments = await getPortfolioDocumentSources(userId, portfolioId);
+    await deleteDocuments(sourceDocuments);
     const result = await deletePortfolio(userId, portfolioId);
 
     if (!result) {
-      return res.status(404).json({
-        status: "error",
-        message: "Portfolio not found"
-      });
+      return res.status(204).send();
     }
 
     return res.status(204).send();
@@ -458,6 +502,152 @@ app.get("/api/analysis/jobs/:jobId", authMiddleware, requireAnalysisEnabled, asy
         status: job.status,
         portfolioId: job.portfolioId,
         result: job.result,
+        error: job.error,
+        createdAt: job.createdAt
+      }
+    });
+  } catch (err) {
+    const statusCode =
+      typeof err?.message === "string" && err.message.startsWith("Unauthorized") ? 401 : 500;
+
+    res.status(statusCode).json({
+      status: "error",
+      message: statusCode === 500 ? "Internal Server Error" : err.message
+    });
+  }
+});
+
+// Upload document for a portfolio
+app.post("/api/portfolios/:portfolioId/upload", authMiddleware, (req, res, next) => {
+  upload.single("file")(req, res, (err) => {
+    if (err) {
+      if (err instanceof multer.MulterError) {
+        const statusCode = err.code === "LIMIT_FILE_SIZE" ? 413 : 400;
+        return res.status(statusCode).json({
+          status: "error",
+          message: statusCode === 413 ? "Uploaded file is too large" : err.message || "Invalid upload"
+        });
+      }
+      if (err.code === "INVALID_FILE_EXTENSION") {
+        return res.status(400).json({
+          status: "error",
+          message: err.message || "Invalid file type. Only .pdf, .xlsx, .xls, and .csv are supported."
+        });
+      }
+      return next(err);
+    }
+    if (!req.file) {
+      return res.status(400).json({
+        status: "error",
+        message: "No file uploaded"
+      });
+    }
+    if (req.file.size > maxUploadSizeBytes) {
+      return res.status(413).json({ status: "error", message: "Uploaded file is too large" });
+    }
+    const validationError = validateUploadContent(req.file.originalname, req.file.buffer);
+    if (validationError) {
+      return res.status(400).json({ status: "error", message: validationError });
+    }
+    next();
+  });
+}, async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const { portfolioId } = req.params;
+
+    const portfolio = await getPortfolio(userId, portfolioId);
+    if (!portfolio) {
+      return res.status(404).json({ status: "error", message: "Portfolio not found" });
+    }
+    if (portfolio.deletionStatus === "DELETING") {
+      return res.status(409).json({ status: "error", message: "Portfolio is being deleted" });
+    }
+
+    const importId = crypto.randomUUID();
+    const sourceDocument = await storeDocument(userId, portfolioId, importId, {
+      originalName: normalizeUploadFilename(req.file.originalname),
+      mimeType: req.file.mimetype,
+      buffer: req.file.buffer
+    });
+
+    let job;
+    try {
+      job = await createDocImportJob(userId, portfolioId, sourceDocument, importId);
+    } catch (err) {
+      try {
+        await deleteDocument(sourceDocument);
+      } catch (cleanupError) {
+        logEvent("error", "document_cleanup_failed", {
+          requestId: req.requestId,
+          importId,
+          errorName: cleanupError?.name || "Error"
+        });
+        throw cleanupError;
+      }
+      throw err;
+    }
+
+    try {
+      await enqueueDocumentImport({ userId, portfolioId, importId: job.importId });
+    } catch (err) {
+      try {
+        await updateDocImportJob(userId, portfolioId, job.importId, "FAILED", null, "Unable to queue document import");
+      } finally {
+        await deleteDocument(sourceDocument);
+      }
+      throw err;
+    }
+
+    res.status(201).json({
+      status: "success",
+      job: {
+        importId: job.importId,
+        status: "UPLOADED"
+      }
+    });
+
+  } catch (err) {
+    const cancellationReasons = err?.CancellationReasons || err?.cancellationReasons;
+    const importConditionFailed = err?.name === "ConditionalCheckFailedException"
+      || (err?.name === "TransactionCanceledException"
+        && Array.isArray(cancellationReasons)
+        && cancellationReasons.slice(0, 2).some(reason => reason?.Code === "ConditionalCheckFailed"));
+    if (importConditionFailed) {
+      return res.status(409).json({ status: "error", message: "Portfolio is unavailable or the document import already exists" });
+    }
+    const statusCode =
+      typeof err?.message === "string" && err.message.startsWith("Unauthorized") ? 401 : 500;
+
+    res.status(statusCode).json({
+      status: "error",
+      message: statusCode === 500 ? "Internal Server Error" : err.message
+    });
+  }
+});
+
+// Get document import job status by portfolioId and importId
+app.get("/api/portfolios/:portfolioId/upload/:importId", authMiddleware, async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const { portfolioId, importId } = req.params;
+
+    const job = await getDocImportJob(userId, importId, portfolioId);
+    if (!job || job.portfolioId !== portfolioId) {
+      return res.status(404).json({
+        status: "error",
+        message: "Document import job not found"
+      });
+    }
+
+    res.json({
+      status: "success",
+      job: {
+        importId: job.importId,
+        portfolioId: job.portfolioId,
+        status: job.status,
+        type: job.type,
+        extractedData: job.extractedData,
         error: job.error,
         createdAt: job.createdAt
       }

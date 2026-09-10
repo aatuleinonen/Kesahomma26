@@ -11,7 +11,7 @@ import {
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3'
-import { UpdateFunctionCodeCommand, LambdaClient } from '@aws-sdk/client-lambda'
+import { UpdateFunctionCodeCommand, LambdaClient, waitUntilFunctionUpdatedV2 } from '@aws-sdk/client-lambda'
 import { CloudFrontClient, CreateInvalidationCommand } from '@aws-sdk/client-cloudfront'
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -164,6 +164,7 @@ async function main() {
   const args = parseArguments(process.argv.slice(2))
   const region = requireArgument(args, 'region')
   const lambdaFunction = requireArgument(args, 'lambda-function')
+  const documentWorkerFunction = requireArgument(args, 'document-worker-function')
   const frontendBucket = requireArgument(args, 'frontend-bucket')
   const distributionId = requireArgument(args, 'distribution-id')
   const userPoolId = requireArgument(args, 'user-pool-id')
@@ -180,6 +181,8 @@ async function main() {
 
   const apiBundle = join(artifactsRoot, 'index.js')
   const apiArchive = join(artifactsRoot, 'api.zip')
+  const documentWorkerBundle = join(artifactsRoot, 'document-worker.js')
+  const documentWorkerArchive = join(artifactsRoot, 'document-worker.zip')
   run('npx', [
     '--no-install',
     'esbuild',
@@ -190,6 +193,16 @@ async function main() {
     `--outfile=${apiBundle}`,
   ])
   await createArchive(apiBundle, apiArchive)
+  run('npx', [
+    '--no-install',
+    'esbuild',
+    'apps/api/src/document-worker.js',
+    '--bundle',
+    '--platform=node',
+    '--target=node24',
+    `--outfile=${documentWorkerBundle}`,
+  ])
+  await createArchive(documentWorkerBundle, documentWorkerArchive)
 
   run('npm', ['run', 'build', '--workspace', '@kesahomma26/frontend'], {
     env: {
@@ -209,10 +222,18 @@ async function main() {
   const cloudFront = new CloudFrontClient({ region: 'us-east-1' })
   await lambda.send(
     new UpdateFunctionCodeCommand({
+      FunctionName: documentWorkerFunction,
+      ZipFile: await readFile(documentWorkerArchive),
+    }),
+  )
+  await waitUntilFunctionUpdatedV2({ client: lambda, maxWaitTime: 120 }, { FunctionName: documentWorkerFunction })
+  await lambda.send(
+    new UpdateFunctionCodeCommand({
       FunctionName: lambdaFunction,
       ZipFile: await readFile(apiArchive),
     }),
   )
+  await waitUntilFunctionUpdatedV2({ client: lambda, maxWaitTime: 120 }, { FunctionName: lambdaFunction })
   await syncFrontend(s3, frontendBucket, join(repositoryRoot, 'apps', 'frontend', 'dist'))
   await cloudFront.send(
     new CreateInvalidationCommand({

@@ -27,6 +27,7 @@ $arguments = @(
   "scripts/deploy-poc.mjs",
   "--region", (Get-TerraformOutput "aws_region"),
   "--lambda-function", (Get-TerraformOutput "api_lambda_function_name"),
+  "--document-worker-function", (Get-TerraformOutput "document_worker_lambda_function_name"),
   "--frontend-bucket", (Get-TerraformOutput "frontend_bucket_name"),
   "--distribution-id", (Get-TerraformOutput "cloudfront_distribution_id"),
   "--user-pool-id", (Get-TerraformOutput "cognito_user_pool_id"),
