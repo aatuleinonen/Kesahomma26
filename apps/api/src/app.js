@@ -10,6 +10,7 @@ const { putTransaction, getTransactions, getPortfolios, getPortfolio, getPortfol
 const { deleteDocument, deleteDocuments, storeDocument } = require("./utils/documentStorage");
 const { enqueueDocumentImport } = require("./utils/documentQueue");
 const { validateNewTransaction, calculatePortfolioState, validateTransactionsState } = require("./utils/transactions");
+const { validateUploadContent } = require("./utils/uploadValidation");
 
 
 const app = express();
@@ -23,15 +24,18 @@ const maxUploadSizeBytes = Number.isSafeInteger(configuredUploadLimitBytes) && c
   : lambdaProxyUploadLimitBytes;
 
 function normalizeUploadFilename(originalName) {
-  return String(originalName || "document")
-    .replace(/[\\/\x00-\x1F]/g, "_")
-    .slice(0, 255) || "document";
+  const sanitized = String(originalName || "document").replace(/[\\/\x00-\x1F]/g, "_");
+  const extension = path.extname(sanitized);
+  const basename = sanitized.slice(0, sanitized.length - extension.length);
+  return `${basename.slice(0, Math.max(1, 255 - extension.length))}${extension}` || "document";
 }
 
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: maxUploadSizeBytes,
+    // Busboy signals its limit when the boundary is reached, so allow one sentinel byte
+    // and enforce the inclusive application limit below.
+    fileSize: maxUploadSizeBytes + 1,
     files: 1
   },
   fileFilter: (req, file, cb) => {
@@ -537,6 +541,13 @@ app.post("/api/portfolios/:portfolioId/upload", authMiddleware, (req, res, next)
         status: "error",
         message: "No file uploaded"
       });
+    }
+    if (req.file.size > maxUploadSizeBytes) {
+      return res.status(413).json({ status: "error", message: "Uploaded file is too large" });
+    }
+    const validationError = validateUploadContent(req.file.originalname, req.file.buffer);
+    if (validationError) {
+      return res.status(400).json({ status: "error", message: validationError });
     }
     next();
   });
