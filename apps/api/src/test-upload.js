@@ -5,7 +5,7 @@ process.env.MOCK_DYNAMODB = "true";
 process.env.DOCUMENT_UPLOAD_MAX_BYTES = "1024";
 
 const app = require("./app");
-const { claimDocImportDispatch, clearMockDb, createDocImportJob, getDocImportJob, getPortfolioDocumentSources, getStaleUploadedDocImports, markPortfolioDeleting, putPortfolio, updateDocImportJob } = require("./utils/ddb");
+const { claimDocImportDispatch, clearMockDb, createDocImportJob, getDocImportJob, getPortfolioDocumentSources, getStaleUploadedDocImports, markPortfolioDeleting, putPortfolio, putTransaction, updateDocImportJob } = require("./utils/ddb");
 const { clearMockDocuments, getMockDocumentCount, hasMockDocument, loadDocument, setMockStoreDocumentHook, storeDocument } = require("./utils/documentStorage");
 const { finalizeImportFailure, handler: documentWorkerHandler, processImportMessage, requeueStaleDocumentImports } = require("./document-worker");
 const zlib = require("zlib");
@@ -394,6 +394,56 @@ const server = app.listen(PORT, async () => {
       throw new Error(`Expected 400 when aggregated extracted values overflow, got ${overflowConfirm.status}`);
     }
     console.log("  PASS: Aggregate overflow is rejected before transaction construction");
+
+    const conflictImport = await createDocImportJob("dev-user-12345-uuid-67890", portfolioId);
+    await updateDocImportJob("dev-user-12345-uuid-67890", portfolioId, conflictImport.importId, "PROCESSING", null, null);
+    await updateDocImportJob("dev-user-12345-uuid-67890", portfolioId, conflictImport.importId, "READY_FOR_REVIEW", [
+      { ticker: "CLASH", quantity: 1, costBasis: 10 }
+    ], null);
+    const fixedConfirmationTime = 1789000000000;
+    const conflictingTimestamp = new Date(fixedConfirmationTime).toISOString();
+    await putTransaction("dev-user-12345-uuid-67890", portfolioId, {
+      type: "transfer_in", ticker: "OLD", quantity: 1, price: 1, amount: 1, timestamp: conflictingTimestamp
+    });
+    const realDateNow = Date.now;
+    Date.now = () => fixedConfirmationTime;
+    let conflictConfirm;
+    try {
+      conflictConfirm = await fetch(`http://localhost:${PORT}/api/portfolios/${portfolioId}/upload/${conflictImport.importId}/confirm`, {
+        method: "POST",
+        headers: { "Authorization": "Bearer dummy-token" }
+      });
+    } finally {
+      Date.now = realDateNow;
+    }
+    const conflictJob = await getDocImportJob("dev-user-12345-uuid-67890", conflictImport.importId, portfolioId);
+    if (conflictConfirm.status !== 409 || conflictJob.status !== "READY_FOR_REVIEW") {
+      throw new Error(`Expected transaction timestamp collision to return retryable 409, got ${conflictConfirm.status}`);
+    }
+    console.log("  PASS: Transaction write conflicts return retryable 409 responses");
+
+    const poisonRetryResult = await documentWorkerHandler({ Records: [{
+      messageId: "malformed-retry", body: "{", attributes: { ApproximateReceiveCount: "1" }
+    }] });
+    if (poisonRetryResult.batchItemFailures[0]?.itemIdentifier !== "malformed-retry") {
+      throw new Error("Expected a malformed non-final message to remain retryable");
+    }
+    const poisonFinalResult = await documentWorkerHandler({ Records: [{
+      messageId: "malformed-final", body: "{", attributes: { ApproximateReceiveCount: "3" }
+    }] });
+    process.env.DOCUMENT_IMPORT_DLQ_ARN = "arn:aws:sqs:eu-north-1:123456789012:document-import-dlq";
+    const poisonDlqResult = await documentWorkerHandler({ Records: [{
+      messageId: "malformed-dlq",
+      body: "{",
+      attributes: { ApproximateReceiveCount: "1" },
+      eventSourceARN: process.env.DOCUMENT_IMPORT_DLQ_ARN
+    }] });
+    delete process.env.DOCUMENT_IMPORT_DLQ_ARN;
+    if (poisonFinalResult.batchItemFailures.length !== 0 || poisonDlqResult.batchItemFailures.length !== 0) {
+      throw new Error("Expected malformed terminal and DLQ messages to be acknowledged");
+    }
+    console.log("  PASS: Poison messages are acknowledged once retries are exhausted");
+
     const finalAttemptResult = await documentWorkerHandler({ Records: [{
       messageId: "final-read-attempt",
       body: JSON.stringify({ userId: "dev-user-12345-uuid-67890", portfolioId, importId: unreadableImport.importId }),

@@ -52,7 +52,8 @@ async function handler(event) {
     let finalAttempt = false;
     try {
       const receiveCount = Number.parseInt(record.attributes?.ApproximateReceiveCount || "1", 10);
-      const fromDeadLetterQueue = record.eventSourceARN === process.env.DOCUMENT_IMPORT_DLQ_ARN;
+      const fromDeadLetterQueue = Boolean(process.env.DOCUMENT_IMPORT_DLQ_ARN)
+        && record.eventSourceARN === process.env.DOCUMENT_IMPORT_DLQ_ARN;
       finalAttempt = fromDeadLetterQueue || receiveCount >= maxReceiveCount;
       message = JSON.parse(record.body);
       await processImportMessage(message, { finalAttempt });
@@ -65,6 +66,10 @@ async function handler(event) {
         } catch (finalizationError) {
           console.error(`[DocParser] Import message ${record.messageId} terminal update failed:`, finalizationError);
         }
+      }
+      if (finalAttempt && !message) {
+        console.error(`[DocParser] Acknowledging unparseable terminal message ${record.messageId}`);
+        continue;
       }
       batchItemFailures.push({ itemIdentifier: record.messageId });
     }

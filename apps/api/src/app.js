@@ -736,6 +736,16 @@ app.post("/api/portfolios/:portfolioId/upload/:importId/confirm", authMiddleware
         message: "Document import was already confirmed or is no longer ready for confirmation"
       });
     }
+    const transactionConditionFailed = err?.code === "IMPORT_TRANSACTION_CONFLICT"
+      || (err?.name === "TransactionCanceledException"
+        && Array.isArray(cancellationReasons)
+        && cancellationReasons.slice(1, -1).some(reason => reason?.Code === "ConditionalCheckFailed"));
+    if (transactionConditionFailed) {
+      return res.status(409).json({
+        status: "error",
+        message: "Imported transactions conflict with existing portfolio activity; retry confirmation"
+      });
+    }
 
     if (err?.code === "TOO_MANY_IMPORT_ASSETS" || err?.code === "INVALID_IMPORT_ASSETS") {
       return res.status(400).json({
