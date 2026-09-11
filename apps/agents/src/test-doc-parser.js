@@ -54,6 +54,20 @@ async function main() {
   assert.equal(invalidUtf8Status, "FAILED");
   assert.match(encodingFailure, /valid UTF-8/);
 
+  const sensitiveValue = "PRIVATE_ACCOUNT_12345";
+  const capturedErrors = [];
+  const originalConsoleError = console.error;
+  console.error = (...args) => capturedErrors.push(args);
+  let privateParseStatus;
+  try {
+    privateParseStatus = await processDocumentImport("user", "portfolio", "private-parse-error", document(`ticker,quantity,costBasis\n"${sensitiveValue},1,100`), async () => {});
+  } finally {
+    console.error = originalConsoleError;
+  }
+  assert.equal(privateParseStatus, "FAILED");
+  assert.ok(capturedErrors.length > 0);
+  assert.doesNotMatch(JSON.stringify(capturedErrors), new RegExp(sensitiveValue));
+
   for (const [value, expectedMessage] of [
     ["0x10", /non-decimal quantity/],
     ["0b10", /non-decimal quantity/],
