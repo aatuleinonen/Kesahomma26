@@ -19,7 +19,7 @@ function crc32(buffer) {
   return (crc ^ 0xFFFFFFFF) >>> 0;
 }
 
-function createZip(files) {
+function createZip(files, comment = Buffer.alloc(0)) {
   const localParts = [];
   const centralParts = [];
   let localOffset = 0;
@@ -57,7 +57,8 @@ function createZip(files) {
   eocd.writeUInt16LE(Object.keys(files).length, 10);
   eocd.writeUInt32LE(directory.length, 12);
   eocd.writeUInt32LE(localOffset, 16);
-  return Buffer.concat([...localParts, directory, eocd]);
+  eocd.writeUInt16LE(comment.length, 20);
+  return Buffer.concat([...localParts, directory, eocd, comment]);
 }
 
 const PORT = Number(process.env.PORT || 3004);
@@ -153,6 +154,10 @@ const server = app.listen(PORT, async () => {
         throw new Error(`Expected a success response with an UPLOADED job for ${filename}, got: ${JSON.stringify(data)}`);
       }
       console.log(`  PASS: ${filename} uploaded successfully with importId: ${data.job.importId}`);
+      const storedJob = await getDocImportJob("dev-user-12345-uuid-67890", data.job.importId, portfolioId);
+      if (storedJob.sourceDocument.mimeType !== "text/csv") {
+        throw new Error(`Expected canonical MIME type text/csv, got ${storedJob.sourceDocument.mimeType}`);
+      }
       createdImportId ||= data.job.importId;
     }
 
