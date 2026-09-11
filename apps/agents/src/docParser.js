@@ -98,7 +98,9 @@ async function processDocumentImport(userId, portfolioId, importId, document, up
       throw new Error("CSV contains too much review data; split it into smaller files");
     }
   } catch (error) {
-    console.error(`[DocParser] Error processing document import job ${importId}:`, error);
+    console.error(`[DocParser] Error processing document import job ${importId}`, {
+      errorName: error instanceof Error ? error.name : "UnknownError"
+    });
     const errorMessage = error instanceof Error ? error.message : "Document processing failed";
     await updateJobStatus("FAILED", null, errorMessage);
     return "FAILED";
