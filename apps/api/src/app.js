@@ -9,7 +9,7 @@ const { getUserId, buildIsolatedQueryParams } = require("./utils/db");
 const { putTransaction, getTransactions, getPortfolios, getPortfolio, getPortfolioDocumentSources, markPortfolioDeleting, putPortfolio, deletePortfolio, deleteTransaction, updateTransaction, createAnalysisJob, getAnalysisJob, updateAnalysisJob, createDocImportJob, getDocImportJob } = require("./utils/ddb");
 const { deleteDocument, deleteDocuments, storeDocument } = require("./utils/documentStorage");
 const { validateNewTransaction, calculatePortfolioState, validateTransactionsState } = require("./utils/transactions");
-const { validateUploadContent } = require("./utils/uploadValidation");
+const { getCanonicalUploadMimeType, validateUploadContent } = require("./utils/uploadValidation");
 
 const app = express();
 app.use(auditMiddleware);
@@ -565,7 +565,7 @@ app.post("/api/portfolios/:portfolioId/upload", authMiddleware, (req, res, next)
     const importId = crypto.randomUUID();
     const sourceDocument = await storeDocument(userId, portfolioId, importId, {
       originalName: normalizeUploadFilename(req.file.originalname),
-      mimeType: req.file.mimetype,
+      mimeType: getCanonicalUploadMimeType(req.file.originalname),
       buffer: req.file.buffer
     });
 

@@ -305,13 +305,19 @@ async function deletePortfolio(userId, portfolioId) {
     }
   }
 
-  await ddbDocClient.send(new DeleteCommand({
-    TableName: tableName,
-    Key: { PK: metadata.PK, SK: metadata.SK },
-    ConditionExpression: "#deletionStatus = :deleting",
-    ExpressionAttributeNames: { "#deletionStatus": "deletionStatus" },
-    ExpressionAttributeValues: { ":deleting": "DELETING" }
-  }));
+  try {
+    await ddbDocClient.send(new DeleteCommand({
+      TableName: tableName,
+      Key: { PK: metadata.PK, SK: metadata.SK },
+      ConditionExpression: "#deletionStatus = :deleting",
+      ExpressionAttributeNames: { "#deletionStatus": "deletionStatus" },
+      ExpressionAttributeValues: { ":deleting": "DELETING" }
+    }));
+  } catch (error) {
+    if (error?.name !== "ConditionalCheckFailedException" || await getPortfolio(userId, portfolioId)) {
+      throw error;
+    }
+  }
 
   return { deletedCount: records.length + 1 };
 }

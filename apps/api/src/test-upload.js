@@ -5,7 +5,7 @@ process.env.MOCK_DYNAMODB = "true";
 process.env.DOCUMENT_UPLOAD_MAX_BYTES = "1024";
 
 const app = require("./app");
-const { clearMockDb, createDocImportJob, getPortfolioDocumentSources, markPortfolioDeleting, putPortfolio } = require("./utils/ddb");
+const { clearMockDb, createDocImportJob, getDocImportJob, getPortfolioDocumentSources, markPortfolioDeleting, putPortfolio } = require("./utils/ddb");
 const { clearMockDocuments, getMockDocumentCount, setMockStoreDocumentHook } = require("./utils/documentStorage");
 const zlib = require("zlib");
 
@@ -18,7 +18,7 @@ function crc32(buffer) {
   return (crc ^ 0xFFFFFFFF) >>> 0;
 }
 
-function createZip(files) {
+function createZip(files, comment = Buffer.alloc(0)) {
   const localParts = [];
   const centralParts = [];
   let localOffset = 0;
@@ -56,7 +56,8 @@ function createZip(files) {
   eocd.writeUInt16LE(Object.keys(files).length, 10);
   eocd.writeUInt32LE(directory.length, 12);
   eocd.writeUInt32LE(localOffset, 16);
-  return Buffer.concat([...localParts, directory, eocd]);
+  eocd.writeUInt16LE(comment.length, 20);
+  return Buffer.concat([...localParts, directory, eocd, comment]);
 }
 
 const PORT = Number(process.env.PORT || 3004);
@@ -127,8 +128,33 @@ const server = app.listen(PORT, async () => {
         throw new Error(`Expected a success response with an UPLOADED job for ${filename}, got: ${JSON.stringify(data)}`);
       }
       console.log(`  PASS: ${filename} uploaded successfully with importId: ${data.job.importId}`);
+      const storedJob = await getDocImportJob("dev-user-12345-uuid-67890", data.job.importId, portfolioId);
+      const expectedMimeType = {
+        ".csv": "text/csv",
+        ".pdf": "application/pdf",
+        ".xls": "application/vnd.ms-excel",
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      }[filename.slice(filename.lastIndexOf("."))];
+      if (storedJob.sourceDocument.mimeType !== expectedMimeType) {
+        throw new Error(`Expected canonical MIME type ${expectedMimeType}, got ${storedJob.sourceDocument.mimeType}`);
+      }
       createdImportId = data.job.importId;
     }
+
+    const xlsxEntries = {
+      "[Content_Types].xml": "<Types/>",
+      "_rels/.rels": "<Relationships/>",
+      "xl/workbook.xml": "<workbook/>"
+    };
+    const zipCommentWithFalseEocd = Buffer.concat([Buffer.from("comment"), Buffer.from([0x50, 0x4B, 0x05, 0x06]), Buffer.alloc(22)]);
+    const commentedXlsx = await uploadFile("commented.xlsx", createZip(xlsxEntries, zipCommentWithFalseEocd));
+    if (commentedXlsx.status !== 201) throw new Error(`Expected ZIP comment signature to be ignored, got ${commentedXlsx.status}`);
+
+    const oversizedEntryXlsx = createZip(xlsxEntries);
+    const centralDirectoryOffset = oversizedEntryXlsx.indexOf(Buffer.from([0x50, 0x4B, 0x01, 0x02]));
+    oversizedEntryXlsx.writeUInt32LE(16 * 1024 * 1024 + 1, centralDirectoryOffset + 24);
+    const oversizedEntryUpload = await uploadFile("expanding.xlsx", oversizedEntryXlsx);
+    if (oversizedEntryUpload.status !== 400) throw new Error(`Expected oversized XLSX entry to return 400, got ${oversizedEntryUpload.status}`);
 
     // 2. Invalid File Upload Tests (.txt, .exe, no file)
     console.log("\nTest 2: Upload invalid files returns 400 Bad Request...");
