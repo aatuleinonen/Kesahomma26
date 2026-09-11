@@ -3,6 +3,14 @@ const path = require("path");
 const zlib = require("zlib");
 
 const OLE_COMPOUND_SIGNATURE = Buffer.from([0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]);
+const maxXlsxEntryBytes = 16 * 1024 * 1024;
+const maxXlsxUncompressedBytes = 32 * 1024 * 1024;
+const canonicalMimeTypes = {
+  ".csv": "text/csv",
+  ".pdf": "application/pdf",
+  ".xls": "application/vnd.ms-excel",
+  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+};
 
 function hasPrefix(buffer, signature) {
   return buffer.length >= signature.length && buffer.subarray(0, signature.length).equals(signature);
@@ -23,12 +31,13 @@ function readZipEntries(buffer) {
   const minimumEocdOffset = Math.max(0, buffer.length - 65557);
   let eocdOffset = -1;
   for (let offset = buffer.length - 22; offset >= minimumEocdOffset; offset -= 1) {
-    if (buffer.readUInt32LE(offset) === 0x06054B50) {
+    if (buffer.readUInt32LE(offset) === 0x06054B50
+      && offset + 22 + buffer.readUInt16LE(offset + 20) === buffer.length) {
       eocdOffset = offset;
       break;
     }
   }
-  if (eocdOffset < 0 || eocdOffset + 22 + buffer.readUInt16LE(eocdOffset + 20) !== buffer.length) {
+  if (eocdOffset < 0) {
     throw new Error("ZIP end-of-directory record is invalid");
   }
 
@@ -44,6 +53,7 @@ function readZipEntries(buffer) {
   }
 
   const entries = new Map();
+  let totalUncompressedBytes = 0;
   let offset = centralDirectoryOffset;
   for (let index = 0; index < entryCount; index += 1) {
     if (offset + 46 > eocdOffset || buffer.readUInt32LE(offset) !== 0x02014B50) {
@@ -63,6 +73,10 @@ function readZipEntries(buffer) {
       || buffer.readUInt32LE(localHeaderOffset) !== 0x04034B50) {
       throw new Error("ZIP entry metadata is invalid");
     }
+    totalUncompressedBytes += uncompressedSize;
+    if (uncompressedSize > maxXlsxEntryBytes || totalUncompressedBytes > maxXlsxUncompressedBytes) {
+      throw new Error("ZIP expands beyond supported workbook limits");
+    }
 
     const name = buffer.subarray(offset + 46, offset + 46 + filenameLength).toString("utf8");
     const localFilenameLength = buffer.readUInt16LE(localHeaderOffset + 26);
@@ -76,7 +90,7 @@ function readZipEntries(buffer) {
     const content = compression === 0
       ? compressed
       : compression === 8
-        ? zlib.inflateRawSync(compressed)
+        ? zlib.inflateRawSync(compressed, { maxOutputLength: maxXlsxEntryBytes })
         : (() => { throw new Error("ZIP compression method is unsupported"); })();
     if (content.length !== uncompressedSize || crc32(content) !== expectedCrc) {
       throw new Error("ZIP entry contents are corrupt");
@@ -86,6 +100,10 @@ function readZipEntries(buffer) {
   }
   if (offset !== eocdOffset) throw new Error("ZIP central directory size is invalid");
   return entries;
+}
+
+function getCanonicalUploadMimeType(originalName) {
+  return canonicalMimeTypes[path.extname(originalName || "").toLowerCase()] || "application/octet-stream";
 }
 
 function validateCsv(buffer) {
@@ -132,4 +150,4 @@ function validateUploadContent(originalName, buffer) {
   return "Unsupported document format";
 }
 
-module.exports = { validateUploadContent };
+module.exports = { getCanonicalUploadMimeType, validateUploadContent };
