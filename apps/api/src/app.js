@@ -629,22 +629,25 @@ app.post("/api/portfolios/:portfolioId/upload", authMiddleware, (req, res, next)
       throw err;
     }
 
+    let dispatchPending = false;
     try {
       await enqueueDocumentImport({ userId, portfolioId, importId: job.importId });
     } catch (err) {
-      try {
-        await updateDocImportJob(userId, portfolioId, job.importId, "FAILED", null, "Unable to queue document import");
-      } finally {
-        await deleteDocument(sourceDocument);
-      }
-      throw err;
+      // Keep the UPLOADED job and source document for the scheduled reconciliation pass.
+      dispatchPending = true;
+      logEvent("warn", "document_import_dispatch_deferred", {
+        requestId: req.requestId,
+        importId: job.importId,
+        errorName: err?.name || "Error"
+      });
     }
 
-    res.status(201).json({
+    res.status(dispatchPending ? 202 : 201).json({
       status: "success",
       job: {
         importId: job.importId,
-        status: "UPLOADED"
+        status: "UPLOADED",
+        dispatchPending
       }
     });
 
