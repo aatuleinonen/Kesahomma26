@@ -4,7 +4,7 @@ process.env.BYPASS_AUTH = "true";
 process.env.MOCK_DYNAMODB = "true";
 
 const app = require("./app");
-const { clearMockDb } = require("./utils/ddb");
+const { clearMockDb, putPortfolio } = require("./utils/ddb");
 
 const PORT = Number(process.env.PORT || 3001);
 const server = app.listen(PORT, async () => {
@@ -32,6 +32,7 @@ const server = app.listen(PORT, async () => {
 
     // Reset database for a clean start
     clearMockDb();
+    await putPortfolio("dev-user-12345-uuid-67890", { portfolioId: "portfolio-1", name: "Transaction test" });
 
     console.log("\n--- Executing Transaction & Holdings Tests ---");
 
@@ -240,6 +241,62 @@ const server = app.listen(PORT, async () => {
       throw new Error(`Expected 400 validation error, got status ${s20}: ${JSON.stringify(d20)}`);
     }
     console.log("  PASS: Backdated withdrawal rejected");
+
+    console.log("Test 21: Reject a transfer-in without a finite price...");
+    const { status: invalidTransferStatus, data: invalidTransferData } = await apiRequest("/api/portfolios/portfolio-1/transactions", "POST", {
+      type: "transfer_in",
+      ticker: "VOO",
+      quantity: 2,
+      price: "not-a-number"
+    });
+    if (invalidTransferStatus !== 400 || !invalidTransferData.message.includes("finite number")) {
+      throw new Error(`Expected invalid transfer-in price to return 400, got: ${JSON.stringify(invalidTransferData)}`);
+    }
+    console.log("  PASS: Missing or nonnumeric transfer-in price rejected cleanly");
+
+    const { status: infiniteAmountStatus } = await apiRequest("/api/portfolios/portfolio-1/transactions", "POST", {
+      type: "transfer_in", ticker: "VOO", quantity: 2, price: 10, amount: "Infinity"
+    });
+    const { status: infiniteQuantityStatus } = await apiRequest("/api/portfolios/portfolio-1/transactions", "POST", {
+      type: "transfer_in", ticker: "VOO", quantity: "Infinity", price: 10, amount: 20
+    });
+    if (infiniteAmountStatus !== 400 || infiniteQuantityStatus !== 400) {
+      throw new Error(`Expected non-finite transfer values to return 400, got amount=${infiniteAmountStatus}, quantity=${infiniteQuantityStatus}`);
+    }
+    console.log("  PASS: Infinite transfer amount and quantity rejected cleanly");
+
+    console.log("Test 22: Create a zero-cost transfer-in without changing cash...");
+    const { status: s21, data: d21 } = await apiRequest("/api/portfolios/portfolio-1/transactions", "POST", {
+      type: "transfer_in",
+      ticker: "VOO",
+      quantity: 2,
+      price: 0,
+      amount: 0,
+      timestamp: "2026-06-20T10:35:00.000Z"
+    });
+    if (s21 !== 201) {
+      throw new Error(`Expected 201 transfer-in creation, got status ${s21}: ${JSON.stringify(d21)}`);
+    }
+    const { data: transferredHoldings } = await apiRequest("/api/portfolios/portfolio-1/holdings");
+    if (transferredHoldings.cashBalance !== 600 || transferredHoldings.holdings.VOO !== 2) {
+      throw new Error(`Expected transfer-in to add shares without changing cash, got: ${JSON.stringify(transferredHoldings)}`);
+    }
+    console.log("  PASS: Transfer-in accepted and holdings updated without a cash movement");
+
+    console.log("Test 23: Edit a transfer-in transaction...");
+    const { status: s22, data: d22 } = await apiRequest(
+      `/api/portfolios/portfolio-1/transactions/${encodeURIComponent(d21.transaction.timestamp)}`,
+      "PUT",
+      { type: "transfer_in", ticker: "VOO", quantity: 3, price: 0, amount: 0, timestamp: d21.transaction.timestamp }
+    );
+    if (s22 !== 200) {
+      throw new Error(`Expected 200 transfer-in update, got status ${s22}: ${JSON.stringify(d22)}`);
+    }
+    const { data: editedTransferHoldings } = await apiRequest("/api/portfolios/portfolio-1/holdings");
+    if (editedTransferHoldings.cashBalance !== 600 || editedTransferHoldings.holdings.VOO !== 3) {
+      throw new Error(`Expected edited transfer-in holdings without a cash movement, got: ${JSON.stringify(editedTransferHoldings)}`);
+    }
+    console.log("  PASS: Transfer-in edit accepted and holdings recalculated");
 
     console.log("\n--- All Transaction tests passed! ---");
   } catch (err) {

@@ -75,4 +75,26 @@ describe('PortfolioDashboard', () => {
     })
     expect(await screen.findByText('No Portfolios Found')).toBeInTheDocument()
   })
+
+  it('includes transfer-ins in holding value and average-cost metrics', async () => {
+    const portfolio = { portfolioId: 'portfolio-1', name: 'POC Portfolio', baseCurrency: 'EUR' }
+    api.getPortfolios.mockResolvedValue({ portfolios: [portfolio] })
+    api.getHoldings.mockResolvedValue({ holdings: { AAPL: 2 }, cashBalance: 0 })
+    api.getTransactions.mockResolvedValue({
+      transactions: [{
+        type: 'transfer_in',
+        ticker: 'AAPL',
+        quantity: 2,
+        price: 100,
+        amount: 200,
+        timestamp: '2026-09-10T00:00:00.000Z',
+      }],
+    })
+
+    render(<PortfolioDashboard user={user} signOut={vi.fn()} />)
+
+    const averageCost = await screen.findByText('Avg: €100.00')
+    expect(averageCost).toBeInTheDocument()
+    expect(averageCost.closest('.holding-item').querySelector('.holding-val')).toHaveTextContent(/€200[,.]00/)
+  })
 })

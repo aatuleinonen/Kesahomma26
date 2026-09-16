@@ -1,7 +1,8 @@
 # Deploys the single-environment serverless application used by invited POC testers.
 
 locals {
-  resource_prefix = "kesahomma26-${var.environment}"
+  resource_prefix                   = "kesahomma26-${var.environment}"
+  document_import_max_receive_count = 3
   application_source_files = sort(concat(
     [
       for file in fileset("${path.root}/../../apps", "**") :
@@ -49,6 +50,21 @@ resource "aws_iam_role_policy" "api_lambda" {
     Version = "2012-10-17"
     Statement = [
       {
+        Sid    = "ManageDocumentImports"
+        Effect = "Allow"
+        Action = [
+          "s3:DeleteObject",
+          "s3:PutObject"
+        ]
+        Resource = "${aws_s3_bucket.document_imports.arn}/*"
+      },
+      {
+        Sid      = "QueueDocumentImports"
+        Effect   = "Allow"
+        Action   = ["sqs:SendMessage"]
+        Resource = aws_sqs_queue.document_imports.arn
+      },
+      {
         Sid    = "WriteFunctionLogs"
         Effect = "Allow"
         Action = [
@@ -67,6 +83,7 @@ resource "aws_iam_role_policy" "api_lambda" {
           "dynamodb:GetItem",
           "dynamodb:PutItem",
           "dynamodb:Query",
+          "dynamodb:TransactWriteItems",
           "dynamodb:UpdateItem"
         ]
         Resource = [
@@ -108,11 +125,13 @@ resource "aws_lambda_function" "api" {
 
   environment {
     variables = {
-      COGNITO_CLIENT_ID    = aws_cognito_user_pool_client.user_pool_client.id
-      COGNITO_USER_POOL_ID = aws_cognito_user_pool.user_pool.id
-      DYNAMODB_TABLE_NAME  = aws_dynamodb_table.single_table.name
-      ENABLE_AI_ANALYSIS   = "false"
-      NODE_ENV             = "production"
+      COGNITO_CLIENT_ID         = aws_cognito_user_pool_client.user_pool_client.id
+      COGNITO_USER_POOL_ID      = aws_cognito_user_pool.user_pool.id
+      DYNAMODB_TABLE_NAME       = aws_dynamodb_table.single_table.name
+      DOCUMENT_IMPORT_BUCKET    = aws_s3_bucket.document_imports.id
+      DOCUMENT_IMPORT_QUEUE_URL = aws_sqs_queue.document_imports.url
+      ENABLE_AI_ANALYSIS        = "false"
+      NODE_ENV                  = "production"
     }
   }
 
@@ -131,6 +150,211 @@ resource "aws_lambda_function" "api" {
     aws_cloudwatch_log_group.api_lambda,
     aws_iam_role_policy.api_lambda
   ]
+}
+
+resource "aws_s3_bucket" "document_imports" {
+  bucket = "${local.resource_prefix}-document-imports-${data.aws_caller_identity.current.account_id}"
+}
+
+resource "aws_s3_bucket_ownership_controls" "document_imports" {
+  bucket = aws_s3_bucket.document_imports.id
+  rule {
+    object_ownership = "BucketOwnerEnforced"
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "document_imports" {
+  bucket                  = aws_s3_bucket.document_imports.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_policy" "document_imports" {
+  bucket = aws_s3_bucket.document_imports.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "DenyInsecureTransport"
+      Effect    = "Deny"
+      Principal = "*"
+      Action    = "s3:*"
+      Resource = [
+        aws_s3_bucket.document_imports.arn,
+        "${aws_s3_bucket.document_imports.arn}/*"
+      ]
+      Condition = {
+        Bool = {
+          "aws:SecureTransport" = "false"
+        }
+      }
+    }]
+  })
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "document_imports" {
+  bucket = aws_s3_bucket.document_imports.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "document_imports" {
+  bucket = aws_s3_bucket.document_imports.id
+  rule {
+    id     = "expire-imports"
+    status = "Enabled"
+    expiration {
+      days = 7
+    }
+  }
+}
+
+resource "aws_sqs_queue" "document_imports_dlq" {
+  name                       = "${local.resource_prefix}-document-imports-dlq"
+  message_retention_seconds  = 1209600
+  visibility_timeout_seconds = 180
+  sqs_managed_sse_enabled    = true
+}
+
+resource "aws_sqs_queue" "document_imports" {
+  name                       = "${local.resource_prefix}-document-imports"
+  visibility_timeout_seconds = 180
+  sqs_managed_sse_enabled    = true
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.document_imports_dlq.arn
+    maxReceiveCount     = local.document_import_max_receive_count
+  })
+}
+
+resource "aws_iam_role" "document_worker" {
+  name = "${local.resource_prefix}-document-worker"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
+      Principal = { Service = "lambda.amazonaws.com" }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "document_worker" {
+  name = "${local.resource_prefix}-document-worker-runtime"
+  role = aws_iam_role.document_worker.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
+        Resource = "${aws_cloudwatch_log_group.document_worker.arn}:*"
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["s3:DeleteObject", "s3:GetObject"]
+        Resource = "${aws_s3_bucket.document_imports.arn}/*"
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["dynamodb:GetItem", "dynamodb:UpdateItem"]
+        Resource = aws_dynamodb_table.single_table.arn
+      },
+      {
+        Effect   = "Allow"
+        Action   = "dynamodb:Query"
+        Resource = "${aws_dynamodb_table.single_table.arn}/index/GSI2"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "sqs:ChangeMessageVisibility",
+          "sqs:DeleteMessage",
+          "sqs:GetQueueAttributes",
+          "sqs:ReceiveMessage"
+        ]
+        Resource = [aws_sqs_queue.document_imports.arn, aws_sqs_queue.document_imports_dlq.arn]
+      },
+      {
+        Effect   = "Allow"
+        Action   = "sqs:SendMessage"
+        Resource = aws_sqs_queue.document_imports.arn
+      }
+    ]
+  })
+}
+
+resource "aws_cloudwatch_log_group" "document_worker" {
+  name              = "/aws/lambda/${local.resource_prefix}-document-worker"
+  retention_in_days = 7
+}
+
+resource "aws_lambda_function" "document_worker" {
+  function_name    = "${local.resource_prefix}-document-worker"
+  description      = "Processes queued portfolio document imports"
+  role             = aws_iam_role.document_worker.arn
+  handler          = "index.handler"
+  runtime          = "nodejs24.x"
+  architectures    = ["arm64"]
+  memory_size      = 512
+  timeout          = 30
+  filename         = data.archive_file.api_placeholder.output_path
+  source_code_hash = data.archive_file.api_placeholder.output_base64sha256
+
+  environment {
+    variables = {
+      DYNAMODB_TABLE_NAME                 = aws_dynamodb_table.single_table.name
+      DOCUMENT_IMPORT_BUCKET              = aws_s3_bucket.document_imports.id
+      DOCUMENT_IMPORT_DLQ_ARN             = aws_sqs_queue.document_imports_dlq.arn
+      DOCUMENT_IMPORT_MAX_RECEIVE_COUNT   = tostring(local.document_import_max_receive_count)
+      DOCUMENT_IMPORT_QUEUE_URL           = aws_sqs_queue.document_imports.url
+      DOCUMENT_IMPORT_STALE_AFTER_SECONDS = "120"
+      NODE_ENV                            = "production"
+    }
+  }
+
+  lifecycle {
+    ignore_changes = [filename, source_code_hash]
+  }
+
+  depends_on = [aws_cloudwatch_log_group.document_worker, aws_iam_role_policy.document_worker]
+}
+
+resource "aws_lambda_event_source_mapping" "document_imports" {
+  event_source_arn        = aws_sqs_queue.document_imports.arn
+  function_name           = aws_lambda_function.document_worker.arn
+  batch_size              = 1
+  function_response_types = ["ReportBatchItemFailures"]
+}
+
+resource "aws_lambda_event_source_mapping" "document_imports_dlq" {
+  event_source_arn        = aws_sqs_queue.document_imports_dlq.arn
+  function_name           = aws_lambda_function.document_worker.arn
+  batch_size              = 1
+  function_response_types = ["ReportBatchItemFailures"]
+}
+
+resource "aws_cloudwatch_event_rule" "document_import_reconciliation" {
+  name                = "${local.resource_prefix}-document-import-reconciliation"
+  description         = "Requeues document imports left UPLOADED by interrupted API dispatches"
+  schedule_expression = "rate(1 minute)"
+}
+
+resource "aws_cloudwatch_event_target" "document_import_reconciliation" {
+  rule = aws_cloudwatch_event_rule.document_import_reconciliation.name
+  arn  = aws_lambda_function.document_worker.arn
+}
+
+resource "aws_lambda_permission" "document_import_reconciliation" {
+  statement_id  = "AllowDocumentImportReconciliation"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.document_worker.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.document_import_reconciliation.arn
 }
 
 resource "aws_apigatewayv2_api" "poc" {
@@ -368,6 +592,7 @@ resource "terraform_data" "application_deployment" {
   triggers_replace = [
     local.application_source_hash,
     aws_lambda_function.api.arn,
+    aws_lambda_function.document_worker.arn,
     aws_s3_bucket.frontend.id,
     aws_cloudfront_distribution.poc.id
   ]
@@ -378,6 +603,7 @@ resource "terraform_data" "application_deployment" {
       "npx --yes node@24.18.1 scripts/deploy-poc-ci.mjs",
       "--region ${var.aws_region}",
       "--lambda-function ${aws_lambda_function.api.function_name}",
+      "--document-worker-function ${aws_lambda_function.document_worker.function_name}",
       "--frontend-bucket ${aws_s3_bucket.frontend.id}",
       "--distribution-id ${aws_cloudfront_distribution.poc.id}",
       "--user-pool-id ${aws_cognito_user_pool.user_pool.id}",
@@ -388,6 +614,7 @@ resource "terraform_data" "application_deployment" {
 
   depends_on = [
     aws_lambda_permission.api_gateway,
+    aws_lambda_event_source_mapping.document_imports,
     aws_s3_bucket_policy.frontend
   ]
 }

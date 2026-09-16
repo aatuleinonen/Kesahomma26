@@ -3,9 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "main": "src/worker.js",
+  "dependencies": {
+    "csv-parse": "^6.1.0"
+  },
   "scripts": {
     "build": "echo \"Building agents...\"",
-    "test": "echo \"Testing agents...\"",
+    "test": "node src/test-doc-parser.js",
     "lint": "echo \"Linting agents...\""
   }
 }
