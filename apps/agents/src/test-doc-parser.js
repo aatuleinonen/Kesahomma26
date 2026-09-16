@@ -111,7 +111,22 @@ async function main() {
     if (status === "FAILED") failureMessage = error;
   });
   assert.equal(oversizedStatus, "FAILED");
-  assert.match(failureMessage, /too much review data/);
+  assert.match(failureMessage, /too many holdings/);
+
+  let rowLimitFailure;
+  const tooManyRows = `ticker,quantity,costBasis\n${Array.from({ length: 501 }, (_, index) => `T${index},1,100`).join("\n")}`;
+  const rowLimitStatus = await processDocumentImport("user", "portfolio", "too-many-rows", document(tooManyRows), async (status, data, error) => {
+    if (status === "FAILED") rowLimitFailure = error;
+  });
+  assert.equal(rowLimitStatus, "FAILED");
+  assert.match(rowLimitFailure, /too many holdings/);
+
+  let recordLimitFailure;
+  const longRecordStatus = await processDocumentImport("user", "portfolio", "long-record", document(`ticker,quantity,costBasis\nAAPL,1,${"1".repeat(17 * 1024)}`), async (status, data, error) => {
+    if (status === "FAILED") recordLimitFailure = error;
+  });
+  assert.equal(longRecordStatus, "FAILED");
+  assert.match(recordLimitFailure, /record/);
 
   console.log("Document parser tests passed");
 }

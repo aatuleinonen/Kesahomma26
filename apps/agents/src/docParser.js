@@ -1,7 +1,9 @@
 const path = require("path");
 const { parse } = require("csv-parse/sync");
 
-const maxReviewPayloadBytes = 300 * 1024;
+const maxReviewPayloadBytes = 80 * 1024;
+const maxReviewRows = 500;
+const maxCsvRecordBytes = 16 * 1024;
 const decimalNumberPattern = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
 const maxFinancialValue = 1e15;
 const minNonZeroFinancialValue = 1e-12;
@@ -75,7 +77,15 @@ async function processDocumentImport(userId, portfolioId, importId, document, up
         return normalized;
       },
       skip_empty_lines: true,
-      trim: true
+      trim: true,
+      // Stop before a small upload can expand into an unbounded in-memory row array.
+      max_record_size: maxCsvRecordBytes,
+      on_record: (record, context) => {
+        if (context.records > maxReviewRows) {
+          throw new Error("CSV contains too many holdings; split it into smaller files");
+        }
+        return record;
+      }
     });
     extracted = rows.map((row, index) => {
       const tickerValue = row.ticker;

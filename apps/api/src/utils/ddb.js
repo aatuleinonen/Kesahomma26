@@ -867,9 +867,9 @@ async function updateDocImportJob(userId, portfolioId, importId, status, extract
  * DynamoDB transactions support at most 100 operations, leaving room for 98 holdings,
  * the portfolio condition check, and the job update.
  */
-async function confirmDocImport(userId, job) {
+async function confirmDocImport(userId, job, reviewedHoldings = job.extractedData) {
   const holdings = new Map();
-  for (const [index, asset] of (Array.isArray(job.extractedData) ? job.extractedData : []).entries()) {
+  for (const [index, asset] of (Array.isArray(reviewedHoldings) ? reviewedHoldings : []).entries()) {
     const ticker = typeof asset?.ticker === "string" ? asset.ticker.trim().toUpperCase() : "";
     const hasQuantity = asset?.quantity !== null && asset?.quantity !== undefined && String(asset.quantity).trim() !== "";
     const hasCostBasis = asset?.costBasis !== null && asset?.costBasis !== undefined && String(asset.costBasis).trim() !== "";

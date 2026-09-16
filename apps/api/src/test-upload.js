@@ -250,6 +250,17 @@ const server = app.listen(PORT, async () => {
     await expectSourceDeleted(reviewImportId);
     console.log("  PASS: Missing optional cost basis is surfaced for review");
 
+    const reviewConfirmation = await fetch(`http://localhost:${PORT}/api/portfolios/${portfolioId}/upload/${reviewImportId}/confirm`, {
+      method: "POST",
+      headers: { "Authorization": "Bearer dummy-token", "Content-Type": "application/json" },
+      body: JSON.stringify({ holdings: [{ ticker: missingCostHolding.ticker, quantity: missingCostHolding.quantity, costBasis: 125 }] })
+    });
+    const reviewConfirmationData = await reviewConfirmation.json();
+    if (reviewConfirmation.status !== 200 || reviewConfirmationData.importedCount !== 1) {
+      throw new Error(`Expected reviewed holding to be confirmed, got ${reviewConfirmation.status}: ${JSON.stringify(reviewConfirmationData)}`);
+    }
+    console.log("  PASS: Reviewed holdings can correct missing values and confirm the import");
+
     // 4. GET Non-existent Job Returns 404
     console.log("\nTest 4: GET non-existent import job returns 404...");
     const fakeImportId = "00000000-0000-0000-0000-000000000000";
@@ -332,7 +343,7 @@ const server = app.listen(PORT, async () => {
     console.log("  PASS: Confirm endpoint returned 200 OK");
 
     const { status: holdingsStatus, data: holdingsData } = await getRequest(`/api/portfolios/${portfolioId}/holdings`);
-    if (holdingsStatus !== 200 || holdingsData.holdings?.AAPL !== 10 || holdingsData.holdings?.VOO !== 5 || holdingsData.cashBalance !== 0) {
+    if (holdingsStatus !== 200 || holdingsData.holdings?.AAPL !== 11 || holdingsData.holdings?.VOO !== 5 || holdingsData.cashBalance !== 0) {
       throw new Error(`Expected confirmed imports to appear in portfolio holdings without changing cash, got: ${JSON.stringify(holdingsData)}`);
     }
     console.log("  PASS: Confirmed import is visible in canonical portfolio holdings");
@@ -354,7 +365,7 @@ const server = app.listen(PORT, async () => {
       throw new Error(`Expected 400 Bad Request on second confirm call, got status ${resConfirm2.status} and data: ${JSON.stringify(dConfirm2)}`);
     }
     const { data: holdingsAfterRetry } = await getRequest(`/api/portfolios/${portfolioId}/holdings`);
-    if (holdingsAfterRetry.holdings?.AAPL !== 10 || holdingsAfterRetry.holdings?.VOO !== 5) {
+    if (holdingsAfterRetry.holdings?.AAPL !== 11 || holdingsAfterRetry.holdings?.VOO !== 5) {
       throw new Error(`Expected a second confirmation attempt not to alter holdings, got: ${JSON.stringify(holdingsAfterRetry)}`);
     }
     console.log("  PASS: Double-import attempt rejected with 400 Bad Request");

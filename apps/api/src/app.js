@@ -22,6 +22,34 @@ const configuredUploadLimitBytes = Number.parseInt(process.env.DOCUMENT_UPLOAD_M
 const maxUploadSizeBytes = Number.isSafeInteger(configuredUploadLimitBytes) && configuredUploadLimitBytes > 0
   ? Math.min(configuredUploadLimitBytes, lambdaProxyUploadLimitBytes)
   : lambdaProxyUploadLimitBytes;
+const maxReviewedHoldings = 500;
+const maxReviewedFinancialValue = 1e15;
+
+function getReviewedHoldings(body) {
+  if (!Object.hasOwn(body || {}, "holdings")) return null;
+  if (!Array.isArray(body.holdings) || body.holdings.length === 0 || body.holdings.length > maxReviewedHoldings) {
+    const error = new Error("Reviewed holdings must be a non-empty array within the supported size limit");
+    error.code = "INVALID_IMPORT_ASSETS";
+    throw error;
+  }
+  return body.holdings.map((holding, index) => {
+    if (!holding || typeof holding !== "object" || Array.isArray(holding)) {
+      const error = new Error(`Reviewed holding ${index + 1} must be an object`);
+      error.code = "INVALID_IMPORT_ASSETS";
+      throw error;
+    }
+    const ticker = typeof holding.ticker === "string" ? holding.ticker.trim().toUpperCase() : "";
+    const quantity = Number(holding.quantity);
+    const costBasis = Number(holding.costBasis);
+    if (!/^[A-Z0-9._-]{1,20}$/.test(ticker) || !Number.isFinite(quantity) || quantity <= 0 || quantity > maxReviewedFinancialValue
+      || !Number.isFinite(costBasis) || costBasis < 0 || costBasis > maxReviewedFinancialValue) {
+      const error = new Error(`Reviewed holding ${index + 1} has invalid ticker, quantity, or cost basis`);
+      error.code = "INVALID_IMPORT_ASSETS";
+      throw error;
+    }
+    return { ticker, quantity, costBasis };
+  });
+}
 function normalizeUploadFilename(originalName) {
   const sanitized = String(originalName || "document").replace(/[\\/\x00-\x1F]/g, "_");
   const extension = path.extname(sanitized);
@@ -692,7 +720,9 @@ app.post("/api/portfolios/:portfolioId/upload/:importId/confirm", authMiddleware
       });
     }
 
-    const hasUsableAssets = Array.isArray(job.extractedData) && job.extractedData.some(asset =>
+    const reviewedHoldings = getReviewedHoldings(req.body);
+    const holdingsToConfirm = reviewedHoldings || job.extractedData;
+    const hasUsableAssets = Array.isArray(holdingsToConfirm) && holdingsToConfirm.some(asset =>
       asset && typeof asset === "object" && !Array.isArray(asset) && typeof asset.ticker === "string" && asset.ticker.trim()
     );
     if (!hasUsableAssets) {
@@ -702,7 +732,7 @@ app.post("/api/portfolios/:portfolioId/upload/:importId/confirm", authMiddleware
       });
     }
 
-    const { job: updatedJob, savedTransactions } = await confirmDocImport(userId, job);
+    const { job: updatedJob, savedTransactions } = await confirmDocImport(userId, job, holdingsToConfirm);
 
     res.json({
       status: "success",
