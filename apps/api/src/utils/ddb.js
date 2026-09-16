@@ -51,9 +51,9 @@ async function sendPortfolioTransaction(pk, portfolioId, transactItems) {
     }));
   } catch (error) {
     const reasons = error?.CancellationReasons || error?.cancellationReasons;
-    if (error?.name === "TransactionCanceledException" && Array.isArray(reasons)) {
-      if (reasons[0]?.Code === "ConditionalCheckFailed") error.code = "PORTFOLIO_UNAVAILABLE";
-      else if (reasons.slice(1).some(reason => reason?.Code === "ConditionalCheckFailed")) error.code = "CHILD_WRITE_CONFLICT";
+    if (error?.name === "TransactionCanceledException") {
+      if (Array.isArray(reasons) && reasons[0]?.Code === "ConditionalCheckFailed") error.code = "PORTFOLIO_UNAVAILABLE";
+      else error.code = "CHILD_WRITE_CONFLICT";
     }
     throw error;
   }

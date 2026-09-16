@@ -64,6 +64,7 @@ function normalizeUploadFilename(originalName) {
 
 function isPortfolioChildConflict(error) {
   return error?.name === "ConditionalCheckFailedException"
+    || error?.name === "TransactionCanceledException"
     || error?.code === "PORTFOLIO_UNAVAILABLE"
     || error?.code === "CHILD_WRITE_CONFLICT";
 }
@@ -654,6 +655,7 @@ app.post("/api/portfolios/:portfolioId/upload", authMiddleware, (req, res, next)
   } catch (err) {
     const cancellationReasons = err?.CancellationReasons || err?.cancellationReasons;
     const importConditionFailed = err?.name === "ConditionalCheckFailedException"
+      || err?.name === "TransactionCanceledException"
       || (err?.name === "TransactionCanceledException"
         && Array.isArray(cancellationReasons)
         && cancellationReasons.slice(0, 2).some(reason => reason?.Code === "ConditionalCheckFailed"));
@@ -774,6 +776,7 @@ app.post("/api/portfolios/:portfolioId/upload/:importId/confirm", authMiddleware
       });
     }
     const transactionConditionFailed = err?.code === "IMPORT_TRANSACTION_CONFLICT"
+      || err?.name === "TransactionCanceledException"
       || (err?.name === "TransactionCanceledException"
         && Array.isArray(cancellationReasons)
         && cancellationReasons.slice(1, -1).some(reason => reason?.Code === "ConditionalCheckFailed"));
