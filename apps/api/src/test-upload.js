@@ -250,6 +250,15 @@ const server = app.listen(PORT, async () => {
     await expectSourceDeleted(reviewImportId);
     console.log("  PASS: Missing optional cost basis is surfaced for review");
 
+    const unresolvedReviewConfirmation = await fetch(`http://localhost:${PORT}/api/portfolios/${portfolioId}/upload/${reviewImportId}/confirm`, {
+      method: "POST",
+      headers: { "Authorization": "Bearer dummy-token", "Content-Type": "application/json" },
+      body: JSON.stringify({ holdings: [{ ticker: missingCostHolding.ticker, quantity: missingCostHolding.quantity, costBasis: null }] })
+    });
+    if (unresolvedReviewConfirmation.status !== 400) {
+      throw new Error(`Expected unresolved reviewed cost basis to be rejected, got ${unresolvedReviewConfirmation.status}`);
+    }
+
     const reviewConfirmation = await fetch(`http://localhost:${PORT}/api/portfolios/${portfolioId}/upload/${reviewImportId}/confirm`, {
       method: "POST",
       headers: { "Authorization": "Bearer dummy-token", "Content-Type": "application/json" },
