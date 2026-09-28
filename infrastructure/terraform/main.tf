@@ -7,13 +7,14 @@ data "aws_caller_identity" "current" {}
 module "aws_infra_pipeline" {
   source = "git::https://github.com/Nets-Platform-Enablement/tf-module-aws-infra-pipeline.git?ref=c97f3f5d455ebd30edea9c37116f5c1f370e5f2c"
 
-  environment          = "dev"
-  branch_name          = "main"
-  github_repository_id = "aatuleinonen/kesahomma26"
-  variables_file       = "./dev.tfvars"
-  tfbackend_file       = "./dev.s3.tfbackend"
-  directory            = "infrastructure/terraform"
-  tflint_version       = "0.64.0"
+  environment           = "dev"
+  branch_name           = "main"
+  github_repository_id  = "aatuleinonen/kesahomma26"
+  variables_file        = "./dev.tfvars"
+  tfbackend_file        = "./dev.s3.tfbackend"
+  directory             = "infrastructure/terraform"
+  tflint_version        = "0.64.0"
+  extra_build_artifacts = ["kesahomma26-dev-api-placeholder.zip"]
 
   enable_checkov       = true
   require_checkov_pass = false
