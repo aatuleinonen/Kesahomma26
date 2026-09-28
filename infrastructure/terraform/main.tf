@@ -14,7 +14,7 @@ module "aws_infra_pipeline" {
   tfbackend_file        = "./dev.s3.tfbackend"
   directory             = "infrastructure/terraform"
   tflint_version        = "0.64.0"
-  extra_build_artifacts = ["kesahomma26-dev-api-placeholder.zip"]
+  extra_build_artifacts = ["lambda-placeholder.zip"]
 
   enable_checkov       = true
   require_checkov_pass = false
