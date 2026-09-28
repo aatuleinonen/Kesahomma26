@@ -24,7 +24,8 @@ locals {
 data "archive_file" "api_placeholder" {
   type        = "zip"
   source_file = "${path.module}/lambda-placeholder.js"
-  output_path = "${path.module}/.terraform/${local.resource_prefix}-api-placeholder.zip"
+  # The pipeline carries this ZIP from its plan step to its separate apply step.
+  output_path = "${path.module}/${local.resource_prefix}-api-placeholder.zip"
 }
 
 resource "aws_iam_role" "api_lambda" {

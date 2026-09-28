@@ -1,5 +1,6 @@
 # Local .terraform directories
 **/.terraform/*
+infrastructure/terraform/*-api-placeholder.zip
 
 # .tfvars files (contains secrets/variables)
 *.tfvars
