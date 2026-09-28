@@ -24,8 +24,8 @@ locals {
 data "archive_file" "api_placeholder" {
   type        = "zip"
   source_file = "${path.module}/lambda-placeholder.js"
-  # The pipeline carries this ZIP from its plan step to its separate apply step.
-  output_path = "${path.module}/${local.resource_prefix}-api-placeholder.zip"
+  # Keep a source copy for the first run before CodePipeline knows to carry plan artifacts.
+  output_path = "${path.module}/lambda-placeholder.zip"
 }
 
 resource "aws_iam_role" "api_lambda" {
