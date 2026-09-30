@@ -16,7 +16,9 @@ if (!isMock) {
     const client = new DynamoDBClient({
       region: process.env.AWS_REGION || "eu-north-1"
     });
-    ddbDocClient = DynamoDBDocumentClient.from(client);
+    ddbDocClient = DynamoDBDocumentClient.from(client, {
+      marshallOptions: { removeUndefinedValues: true }
+    });
   } catch (err) {
     console.error("Failed to initialize real DynamoDB Client, falling back to mock:", err);
   }
