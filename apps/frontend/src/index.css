@@ -205,7 +205,9 @@ a { color: inherit; }
 .form-textarea { resize: vertical; }
 .portfolio-select { width: auto; max-width: min(100%, 230px); }
 .form-error { color: var(--danger); background: #fbeef0; border-radius: 8px; padding: 9px 12px; font-size: .875rem; }
-.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.chart-data { margin-top: 12px; }
+.chart-data summary { cursor: pointer; width: fit-content; color: var(--accent); font-size: .875rem; font-weight: 650; }
+.chart-data[open] summary { margin-bottom: 8px; }
 
 @media (max-width: 820px) {
   .workspace-grid { grid-template-columns: minmax(0, 1fr); }

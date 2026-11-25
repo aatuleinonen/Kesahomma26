@@ -18,20 +18,34 @@ export function PortfolioHistory({ history, formatMoney }) {
   const baseline = -min / span * 100;
 
   return (
-    <figure className="history-chart">
-      <div className="chart-bars" aria-hidden="true">
-        <div className="chart-baseline" style={{ bottom: `${baseline}%` }} />
-        {points.map(({ timestamp, balance }) => (
-          <div className="chart-column" key={timestamp} title={`${dateLabel(timestamp)} · ${formatMoney(balance)}`}>
-            <div className={balance < 0 ? 'chart-bar negative' : 'chart-bar'} style={{
-              bottom: `${baseline + Math.min(balance, 0) / span * 100}%`,
-              height: `${Math.abs(balance) / span * 100}%`
-            }} />
-          </div>
-        ))}
-      </div>
-      <p className="sr-only">First recorded balance {formatMoney(days[0].balance)}. Latest recorded balance {formatMoney(days.at(-1).balance)}.</p>
-      <figcaption><span>{dateLabel(days[0].timestamp)}</span><span>{days.length > 1 ? dateLabel(days.at(-1).timestamp) : ''}</span></figcaption>
-    </figure>
+    <>
+      <figure className="history-chart">
+        <div className="chart-bars" aria-hidden="true">
+          <div className="chart-baseline" style={{ bottom: `${baseline}%` }} />
+          {points.map(({ timestamp, balance }) => (
+            <div className="chart-column" key={timestamp} title={`${dateLabel(timestamp)} · ${formatMoney(balance)}`}>
+              <div className={balance < 0 ? 'chart-bar negative' : 'chart-bar'} style={{
+                bottom: `${baseline + Math.min(balance, 0) / span * 100}%`,
+                height: `${Math.abs(balance) / span * 100}%`
+              }} />
+            </div>
+          ))}
+        </div>
+        <figcaption><span>{dateLabel(days[0].timestamp)}</span><span>{days.length > 1 ? dateLabel(days.at(-1).timestamp) : ''}</span></figcaption>
+      </figure>
+      <details className="chart-data">
+        <summary>View chart data</summary>
+        <div className="table-responsive">
+          <table className="custom-table" aria-label="Plotted ledger balances">
+            <thead><tr><th scope="col">Date</th><th scope="col">Ledger balance</th></tr></thead>
+            <tbody>
+              {points.map(({ timestamp, balance }) => (
+                <tr key={timestamp}><th scope="row">{dateLabel(timestamp)}</th><td>{formatMoney(balance)}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </details>
+    </>
   );
 }

@@ -6,7 +6,9 @@ export function summarizeLedger(transactions) {
   let costBasis = 0;
   const sorted = [...transactions].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 
-  for (const { ticker, type, quantity, price, amount, timestamp } of sorted) {
+  for (const transaction of sorted) {
+    const { ticker, quantity, price, amount, timestamp } = transaction;
+    const type = (transaction.type || '').toLowerCase();
     const shares = Number(quantity) || 0;
     const total = Number(amount ?? shares * (Number(price) || 0));
     if (type === 'buy' || type === 'transfer_in') {

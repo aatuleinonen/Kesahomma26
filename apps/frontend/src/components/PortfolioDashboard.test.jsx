@@ -1,6 +1,6 @@
-// Verifies the invited-user dashboard's empty, error, and deletion states.
+// Verifies portfolio creation, ledger rendering, and transaction interactions.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import PortfolioDashboard from './PortfolioDashboard'
 import { api } from '../utils/api'
 
@@ -78,19 +78,23 @@ describe('PortfolioDashboard', () => {
     expect(await screen.findByText('No Portfolios Found')).toBeInTheDocument()
   })
 
-  it('includes transfer-ins in holding value and average-cost metrics', async () => {
+  it('calculates mixed-case ledger entries and exposes intermediate chart balances', async () => {
     const portfolio = { portfolioId: 'portfolio-1', name: 'POC Portfolio', baseCurrency: 'EUR' }
     api.getPortfolios.mockResolvedValue({ portfolios: [portfolio] })
-    api.getHoldings.mockResolvedValue({ holdings: { AAPL: 2 }, cashBalance: 0 })
+    api.getHoldings.mockResolvedValue({ holdings: { AAPL: 2 }, cashBalance: 25 })
     api.getTransactions.mockResolvedValue({
-      transactions: [{
-        type: 'transfer_in',
-        ticker: 'AAPL',
-        quantity: 2,
-        price: 100,
-        amount: 200,
-        timestamp: '2026-09-10T00:00:00.000Z',
-      }],
+      transactions: [
+        { type: 'DEPOSIT', amount: 50, timestamp: '2026-09-09T12:00:00.000Z' },
+        {
+          type: 'TRANSFER_IN',
+          ticker: 'AAPL',
+          quantity: 2,
+          price: 100,
+          amount: 200,
+          timestamp: '2026-09-10T12:00:00.000Z',
+        },
+        { type: 'Withdrawal', amount: 25, timestamp: '2026-09-11T12:00:00.000Z' },
+      ],
     })
 
     render(<PortfolioDashboard user={user} signOut={vi.fn()} />)
@@ -98,6 +102,69 @@ describe('PortfolioDashboard', () => {
     const averageCost = await screen.findByText(/Avg: €100[,.]00/)
     expect(averageCost).toBeInTheDocument()
     expect(averageCost.closest('.holding-item').querySelector('.holding-val')).toHaveTextContent(/€200[,.]00/)
+    fireEvent.click(screen.getByText('View chart data'))
+    const chart = within(screen.getByRole('table', { name: 'Plotted ledger balances' }))
+    expect(chart.getAllByRole('cell').map(cell => cell.textContent)).toEqual([
+      expect.stringMatching(/€50[,.]00/),
+      expect.stringMatching(/€250[,.]00/),
+      expect.stringMatching(/€225[,.]00/),
+    ])
+  })
+
+  it('preserves existing portfolios when a creation completes before the list request', async () => {
+    const existing = { portfolioId: 'existing', name: 'Existing holdings', baseCurrency: 'EUR' }
+    const created = { portfolioId: 'created', name: 'New holdings', baseCurrency: 'EUR' }
+    const { promise, resolve } = Promise.withResolvers()
+    api.getPortfolios.mockReturnValue(promise)
+    api.createPortfolio.mockResolvedValue({ portfolio: created })
+
+    render(<PortfolioDashboard user={user} signOut={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: /New Portfolio/ }))
+    fireEvent.change(screen.getByLabelText('Portfolio Name'), { target: { value: created.name } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create Portfolio' }))
+    await screen.findByRole('heading', { name: created.name })
+
+    resolve({ portfolios: [existing] })
+    await screen.findByRole('option', { name: existing.name })
+    expect(screen.getByRole('combobox', { name: 'Portfolio' })).toHaveValue(created.portfolioId)
+    expect(screen.getAllByRole('option')).toHaveLength(2)
+  })
+
+  it('keeps millisecond edit keys and defaults a same-minute sale after the latest opening', async () => {
+    const portfolio = { portfolioId: 'portfolio-1', name: 'POC Portfolio', baseCurrency: 'EUR' }
+    const first = '2026-09-10T12:00:12.101Z'
+    const second = '2026-09-10T12:00:12.102Z'
+    api.getPortfolios.mockResolvedValue({ portfolios: [portfolio] })
+    api.getTransactions.mockResolvedValue({
+      transactions: [
+        { type: 'transfer_in', ticker: 'AAPL', quantity: 2, price: 100, amount: 200, timestamp: first },
+        { type: 'TRANSFER_IN', ticker: 'MSFT', quantity: 1, price: 100, amount: 100, timestamp: second },
+      ],
+    })
+    api.updateTransaction.mockResolvedValue({})
+    api.createTransaction.mockResolvedValue({})
+
+    render(<PortfolioDashboard user={user} signOut={vi.fn()} />)
+    const msft = await screen.findByRole('row', { name: /MSFT/ })
+    fireEvent.click(within(msft).getByRole('button', { name: 'Edit transaction' }))
+    expect(screen.getByLabelText('Date & Time')).toHaveAttribute('step', '0.001')
+    expect(screen.getByLabelText('Date & Time').value).toMatch(/:12\.102$/)
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+    await waitFor(() => expect(api.updateTransaction).toHaveBeenCalledWith(
+      portfolio.portfolioId, second, expect.objectContaining({ timestamp: second, type: 'transfer_in' }),
+    ))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+
+    vi.spyOn(Date, 'now').mockReturnValue(Date.parse(second))
+    fireEvent.click(screen.getByRole('button', { name: /Add Transaction/ }))
+    fireEvent.change(screen.getByLabelText('Transaction Type'), { target: { value: 'sell' } })
+    fireEvent.change(screen.getByLabelText('Asset Ticker Symbol'), { target: { value: 'AAPL' } })
+    fireEvent.change(screen.getByLabelText('Quantity (Shares)'), { target: { value: '1' } })
+    fireEvent.change(screen.getByLabelText(/Price per Share/), { target: { value: '100' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Record Transaction' }))
+    await waitFor(() => expect(api.createTransaction).toHaveBeenCalledWith(
+      portfolio.portfolioId, expect.objectContaining({ timestamp: '2026-09-10T12:00:12.103Z', type: 'sell' }),
+    ))
   })
 
   it('reviews and corrects AI holdings before creating the portfolio', async () => {

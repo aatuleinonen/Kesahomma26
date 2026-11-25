@@ -4,6 +4,11 @@ import PortfolioAssistant from './PortfolioAssistant';
 import { PortfolioHistory } from './PortfolioHistory';
 import { summarizeLedger } from '../utils/ledger';
 
+function toLocalTimestamp(timestamp) {
+  const date = new Date(timestamp);
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, -1);
+}
+
 export default function PortfolioDashboard({ signOut, user }) {
   // State
   const [portfolios, setPortfolios] = useState([]);
@@ -15,7 +20,7 @@ export default function PortfolioDashboard({ signOut, user }) {
   const [detailsId, setDetailsId] = useState('');
   const latestDetailsRequest = useRef(0);
   const selectedPortfolioId = useRef('');
-  const latestListRequest = useRef(0);
+  const pendingPortfolioList = useRef(null);
   const [error, setError] = useState(null);
 
   // Modals state
@@ -36,20 +41,28 @@ export default function PortfolioDashboard({ signOut, user }) {
     quantity: '',
     price: '',
     amount: '',
-    timestamp: ''
+    timestamp: '',
+    originalTimestamp: ''
   });
 
   const [formError, setFormError] = useState(null);
   const [formSubmitting, setFormSubmitting] = useState(false);
 
   const loadPortfolios = async () => {
-    const request = ++latestListRequest.current;
+    const selectedAtStart = selectedPortfolioId.current;
+    const request = { created: pendingPortfolioList.current?.created ?? new Map() };
+    pendingPortfolioList.current = request;
     try {
       setLoading(true);
       setError(null);
       const res = await api.getPortfolios();
-      if (request !== latestListRequest.current) return;
-      const list = res.portfolios || [];
+      if (request !== pendingPortfolioList.current) return;
+      const listedPortfolios = new Map((res.portfolios || []).map(portfolio => [portfolio.portfolioId, portfolio]));
+      // The response may be a snapshot from before a concurrent save.
+      for (const [id, portfolio] of request.created) {
+        if (!listedPortfolios.has(id)) listedPortfolios.set(id, portfolio);
+      }
+      const list = [...listedPortfolios.values()];
       setPortfolios(list);
       const selected = selectedPortfolioId.current;
       const next = list.some(portfolio => portfolio.portfolioId === selected)
@@ -61,11 +74,13 @@ export default function PortfolioDashboard({ signOut, user }) {
         setDetailsId('');
         setCurrentPortfolioId(next);
       }
-      if (!next || selected === next) setLoading(false);
+      if (!next || (selected === next && selectedAtStart === selected)) setLoading(false);
     } catch {
-      if (request !== latestListRequest.current) return;
+      if (request !== pendingPortfolioList.current) return;
       setError('Failed to fetch portfolios. Please check if the API backend is running.');
       setLoading(false);
+    } finally {
+      if (request === pendingPortfolioList.current) pendingPortfolioList.current = null;
     }
   };
 
@@ -128,7 +143,7 @@ export default function PortfolioDashboard({ signOut, user }) {
   }
 
   function portfolioCreated(portfolio) {
-    latestListRequest.current++;
+    pendingPortfolioList.current?.created.set(portfolio.portfolioId, portfolio);
     setPortfolios(previous => [...previous.filter(item => item.portfolioId !== portfolio.portfolioId), portfolio]);
     selectPortfolio(portfolio.portfolioId);
   }
@@ -186,9 +201,8 @@ export default function PortfolioDashboard({ signOut, user }) {
   const handleOpenAddTxn = () => {
     setEditingTransaction(null);
 
-    const now = new Date();
-    const tzOffset = now.getTimezoneOffset() * 60000;
-    const localNow = new Date(now.getTime() - tzOffset);
+    const latest = transactions.reduce((time, txn) => Math.max(time, Date.parse(txn.timestamp) || 0), 0);
+    const originalTimestamp = new Date(Math.max(Date.now(), latest + 1)).toISOString();
 
     setTransactionForm({
       type: 'deposit',
@@ -196,7 +210,8 @@ export default function PortfolioDashboard({ signOut, user }) {
       quantity: '',
       price: '',
       amount: '',
-      timestamp: localNow.toISOString().substring(0, 16) // format for datetime-local (local time)
+      timestamp: toLocalTimestamp(originalTimestamp),
+      originalTimestamp
     });
     setFormError(null);
     setTransactionModalOpen(true);
@@ -204,20 +219,14 @@ export default function PortfolioDashboard({ signOut, user }) {
 
   const handleOpenEditTxn = (txn) => {
     setEditingTransaction(txn);
-    // Convert timestamp ISO string to local datetime format (YYYY-MM-DDTHH:mm)
-    const localDate = new Date(txn.timestamp);
-    // Adjust timezone offset to preserve date/time correctly
-    const tzOffset = localDate.getTimezoneOffset() * 60000;
-    const adjustedDate = new Date(localDate.getTime() - tzOffset);
-    const dateString = adjustedDate.toISOString().substring(0, 16);
-
     setTransactionForm({
-      type: txn.type,
+      type: txn.type.toLowerCase(),
       ticker: txn.ticker || '',
       quantity: txn.quantity !== undefined ? txn.quantity.toString() : '',
       price: txn.price !== undefined ? txn.price.toString() : '',
       amount: txn.amount !== undefined ? txn.amount.toString() : '',
-      timestamp: dateString
+      timestamp: toLocalTimestamp(txn.timestamp),
+      originalTimestamp: txn.timestamp
     });
     setFormError(null);
     setTransactionModalOpen(true);
@@ -240,7 +249,7 @@ export default function PortfolioDashboard({ signOut, user }) {
     e.preventDefault();
     setFormError(null);
 
-    const { type, ticker, quantity, price, amount, timestamp } = transactionForm;
+    const { type, ticker, quantity, price, amount, timestamp, originalTimestamp } = transactionForm;
 
     // Validations
     if (['buy', 'sell', 'transfer_in'].includes(type)) {
@@ -258,7 +267,8 @@ export default function PortfolioDashboard({ signOut, user }) {
 
       const parsedTxn = {
         type,
-        timestamp: timestamp ? new Date(timestamp).toISOString() : new Date().toISOString()
+        // Keep the original instant when the local time has not been edited, including during DST overlaps.
+        timestamp: timestamp === toLocalTimestamp(originalTimestamp) ? originalTimestamp : new Date(timestamp).toISOString()
       };
 
       if (['buy', 'sell', 'transfer_in'].includes(type)) {
@@ -393,12 +403,13 @@ export default function PortfolioDashboard({ signOut, user }) {
                             <thead><tr><th>Date &amp; time</th><th>Type</th><th>Ticker</th><th>Shares</th><th>Price</th><th>Amount</th><th>Actions</th></tr></thead>
                             <tbody>
                               {[...transactions].sort((a, b) => b.timestamp.localeCompare(a.timestamp)).map(t => {
-                                const isTrade = ['buy', 'sell', 'transfer_in'].includes(t.type);
+                                const type = t.type.toLowerCase();
+                                const isTrade = ['buy', 'sell', 'transfer_in'].includes(type);
                                 const total = t.amount ?? (Number(t.quantity) * Number(t.price));
                                 return (
                                   <tr key={t.timestamp}>
                                     <td>{new Date(t.timestamp).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</td>
-                                    <td><span className={`txn-badge ${t.type}`}>{t.type.replace('_', ' ')}</span></td>
+                                    <td><span className={`txn-badge ${type}`}>{type.replace('_', ' ')}</span></td>
                                     <td>{t.ticker || '—'}</td>
                                     <td>{isTrade ? Number(t.quantity).toLocaleString() : '—'}</td>
                                     <td>{isTrade ? formatMoney(t.price) : '—'}</td>
@@ -522,6 +533,7 @@ export default function PortfolioDashboard({ signOut, user }) {
                     <label className="form-label" htmlFor="transaction-time">Date & Time</label>
                     <input id="transaction-time"
                       type="datetime-local"
+                      step="0.001"
                       className="form-input"
                       value={transactionForm.timestamp}
                       onChange={(e) => setTransactionForm({ ...transactionForm, timestamp: e.target.value })}
