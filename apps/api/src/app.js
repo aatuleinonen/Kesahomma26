@@ -346,6 +346,7 @@ app.post("/api/portfolios", authMiddleware, async (req, res) => {
         return res.status(400).json({ message: error.message });
       }
       Object.assign(portfolio, { name: draft.name, baseCurrency: draft.baseCurrency, description: draft.description });
+      // Use distinct ledger keys and end the opening batch one millisecond before creation.
       const start = Date.now() - draft.holdings.length;
       initialTransactions = draft.holdings.map(({ ticker, quantity, costBasis }, index) => ({
         type: "transfer_in",

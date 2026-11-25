@@ -4,6 +4,11 @@ import PortfolioAssistant from './PortfolioAssistant';
 import { PortfolioHistory } from './PortfolioHistory';
 import { summarizeLedger } from '../utils/ledger';
 
+const transactionTimeOptions = {
+  year: 'numeric', month: 'short', day: 'numeric',
+  hour: 'numeric', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 3
+};
+
 function toLocalTimestamp(timestamp) {
   const date = new Date(timestamp);
   return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, -1);
@@ -48,9 +53,11 @@ export default function PortfolioDashboard({ signOut, user }) {
   const [formError, setFormError] = useState(null);
   const [formSubmitting, setFormSubmitting] = useState(false);
 
-  const loadPortfolios = async () => {
+  const loadPortfolios = async (deletedPortfolioId) => {
     const selectedAtStart = selectedPortfolioId.current;
-    const request = { created: pendingPortfolioList.current?.created ?? new Map() };
+    const changes = pendingPortfolioList.current?.changes ?? new Map();
+    if (deletedPortfolioId) changes.set(deletedPortfolioId, null);
+    const request = { changes };
     pendingPortfolioList.current = request;
     try {
       setLoading(true);
@@ -58,9 +65,10 @@ export default function PortfolioDashboard({ signOut, user }) {
       const res = await api.getPortfolios();
       if (request !== pendingPortfolioList.current) return;
       const listedPortfolios = new Map((res.portfolios || []).map(portfolio => [portfolio.portfolioId, portfolio]));
-      // The response may be a snapshot from before a concurrent save.
-      for (const [id, portfolio] of request.created) {
-        if (!listedPortfolios.has(id)) listedPortfolios.set(id, portfolio);
+      // The response may be a snapshot from before a concurrent save or deletion.
+      for (const [id, portfolio] of changes) {
+        if (portfolio === null) listedPortfolios.delete(id);
+        else if (!listedPortfolios.has(id)) listedPortfolios.set(id, portfolio);
       }
       const list = [...listedPortfolios.values()];
       setPortfolios(list);
@@ -143,7 +151,7 @@ export default function PortfolioDashboard({ signOut, user }) {
   }
 
   function portfolioCreated(portfolio) {
-    pendingPortfolioList.current?.created.set(portfolio.portfolioId, portfolio);
+    pendingPortfolioList.current?.changes.set(portfolio.portfolioId, portfolio);
     setPortfolios(previous => [...previous.filter(item => item.portfolioId !== portfolio.portfolioId), portfolio]);
     selectPortfolio(portfolio.portfolioId);
   }
@@ -181,6 +189,7 @@ export default function PortfolioDashboard({ signOut, user }) {
 
   const handleDeletePortfolio = async () => {
     if (!currentPortfolio) return;
+    const { portfolioId } = currentPortfolio;
     const confirmed = window.confirm(
       `Delete "${currentPortfolio.name}" and all of its transactions? This cannot be undone in the application.`
     );
@@ -189,8 +198,9 @@ export default function PortfolioDashboard({ signOut, user }) {
     try {
       setError(null);
       setLoading(true);
-      await api.deletePortfolio(currentPortfolio.portfolioId);
-      await loadPortfolios();
+      await api.deletePortfolio(portfolioId);
+      setPortfolios(previous => previous.filter(portfolio => portfolio.portfolioId !== portfolioId));
+      await loadPortfolios(portfolioId);
     } catch (err) {
       setError(err.message || 'Failed to delete portfolio.');
       setLoading(false);
@@ -328,7 +338,7 @@ export default function PortfolioDashboard({ signOut, user }) {
               <section className="dashboard-card state-card" role="alert">
                 <h2>Service Unavailable</h2>
                 <p>{error}</p>
-                <button className="btn-secondary" onClick={loadPortfolios}>Retry</button>
+                <button className="btn-secondary" onClick={() => loadPortfolios()}>Retry</button>
               </section>
             ) : !currentPortfolio ? (
               <section className="dashboard-card empty-state-card">
@@ -408,7 +418,7 @@ export default function PortfolioDashboard({ signOut, user }) {
                                 const total = t.amount ?? (Number(t.quantity) * Number(t.price));
                                 return (
                                   <tr key={t.timestamp}>
-                                    <td>{new Date(t.timestamp).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</td>
+                                    <td><time dateTime={t.timestamp}>{new Date(t.timestamp).toLocaleString(undefined, transactionTimeOptions)}</time></td>
                                     <td><span className={`txn-badge ${type}`}>{type.replace('_', ' ')}</span></td>
                                     <td>{t.ticker || '—'}</td>
                                     <td>{isTrade ? Number(t.quantity).toLocaleString() : '—'}</td>

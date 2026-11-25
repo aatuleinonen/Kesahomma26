@@ -1,6 +1,6 @@
 // Verifies portfolio creation, ledger rendering, and transaction interactions.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import PortfolioDashboard from './PortfolioDashboard'
 import { api } from '../utils/api'
 
@@ -130,6 +130,31 @@ describe('PortfolioDashboard', () => {
     expect(screen.getAllByRole('option')).toHaveLength(2)
   })
 
+  it.each(['empty', 'stale'])('keeps a deleted creation hidden when the refresh is %s and the initial list is pending', async refresh => {
+    const created = { portfolioId: 'created', name: 'New holdings', baseCurrency: 'EUR' }
+    const initial = Promise.withResolvers()
+    api.getPortfolios
+      .mockReturnValueOnce(initial.promise)
+      .mockResolvedValue({ portfolios: refresh === 'stale' ? [created] : [] })
+    api.createPortfolio.mockResolvedValue({ portfolio: created })
+    api.deletePortfolio.mockResolvedValue(null)
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+
+    render(<PortfolioDashboard user={user} signOut={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: /New Portfolio/ }))
+    fireEvent.change(screen.getByLabelText('Portfolio Name'), { target: { value: created.name } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create Portfolio' }))
+    const deleteButton = await screen.findByRole('button', { name: 'Delete Portfolio' })
+    await waitFor(() => expect(deleteButton).toBeEnabled())
+    fireEvent.click(deleteButton)
+
+    expect(await screen.findByText('No Portfolios Found')).toBeInTheDocument()
+    expect(api.deletePortfolio).toHaveBeenCalledWith(created.portfolioId)
+    await act(async () => initial.resolve({ portfolios: [created] }))
+    expect(screen.getByText('No Portfolios Found')).toBeInTheDocument()
+    expect(screen.queryByRole('combobox', { name: 'Portfolio' })).not.toBeInTheDocument()
+  })
+
   it('keeps millisecond edit keys and defaults a same-minute sale after the latest opening', async () => {
     const portfolio = { portfolioId: 'portfolio-1', name: 'POC Portfolio', baseCurrency: 'EUR' }
     const first = '2026-09-10T12:00:12.101Z'
@@ -146,6 +171,9 @@ describe('PortfolioDashboard', () => {
 
     render(<PortfolioDashboard user={user} signOut={vi.fn()} />)
     const msft = await screen.findByRole('row', { name: /MSFT/ })
+    const aapl = screen.getByRole('row', { name: /AAPL/ })
+    expect(msft.querySelector('time')).toHaveTextContent(/102/)
+    expect(aapl.querySelector('time')).toHaveTextContent(/101/)
     fireEvent.click(within(msft).getByRole('button', { name: 'Edit transaction' }))
     expect(screen.getByLabelText('Date & Time')).toHaveAttribute('step', '0.001')
     expect(screen.getByLabelText('Date & Time').value).toMatch(/:12\.102$/)
