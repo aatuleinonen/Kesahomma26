@@ -10,6 +10,7 @@ vi.mock('../utils/api', () => ({
     createTransaction: vi.fn(),
     deletePortfolio: vi.fn(),
     deleteTransaction: vi.fn(),
+    draftPortfolio: vi.fn(),
     getHoldings: vi.fn(),
     getPortfolios: vi.fn(),
     getTransactions: vi.fn(),
@@ -68,6 +69,7 @@ describe('PortfolioDashboard', () => {
     render(<PortfolioDashboard user={user} signOut={vi.fn()} />)
 
     const deleteButton = await screen.findByRole('button', { name: 'Delete Portfolio' })
+    await waitFor(() => expect(deleteButton).toBeEnabled())
     fireEvent.click(deleteButton)
 
     await waitFor(() => {
@@ -93,8 +95,45 @@ describe('PortfolioDashboard', () => {
 
     render(<PortfolioDashboard user={user} signOut={vi.fn()} />)
 
-    const averageCost = await screen.findByText('Avg: €100.00')
+    const averageCost = await screen.findByText(/Avg: €100[,.]00/)
     expect(averageCost).toBeInTheDocument()
     expect(averageCost.closest('.holding-item').querySelector('.holding-val')).toHaveTextContent(/€200[,.]00/)
+  })
+
+  it('reviews and corrects AI holdings before creating the portfolio', async () => {
+    api.getPortfolios.mockResolvedValue({ portfolios: [] })
+    api.draftPortfolio.mockResolvedValue({
+      draft: {
+        name: 'Long-term holdings',
+        description: 'Existing positions',
+        baseCurrency: 'USD',
+        holdings: [{ ticker: 'AAPL', quantity: 12, costBasis: null }],
+        notes: 'Provide the original cost.',
+      },
+    })
+    api.createPortfolio.mockResolvedValue({
+      portfolio: { portfolioId: 'saved', name: 'Reviewed holdings', baseCurrency: 'USD' },
+    })
+    api.getHoldings.mockResolvedValue({ holdings: { AAPL: 12 }, cashBalance: 0 })
+
+    render(<PortfolioDashboard user={user} signOut={vi.fn()} />)
+    await screen.findByText('No Portfolios Found')
+    fireEvent.click(screen.getByRole('button', { name: 'Use an example' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Generate draft' }))
+    expect(await screen.findByText('Provide the original cost.')).toBeInTheDocument()
+    expect(api.createPortfolio).not.toHaveBeenCalled()
+
+    fireEvent.change(screen.getByLabelText('Portfolio name'), { target: { value: 'Reviewed holdings' } })
+    fireEvent.change(screen.getByLabelText('Total original cost'), { target: { value: '2040' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save portfolio' }))
+
+    expect(await screen.findByRole('heading', { name: 'Reviewed holdings' })).toBeInTheDocument()
+    expect(api.createPortfolio).toHaveBeenCalledWith({
+      portfolioId: expect.stringMatching(/^portfolio-/),
+      name: 'Reviewed holdings',
+      description: 'Existing positions',
+      baseCurrency: 'USD',
+      holdings: [{ ticker: 'AAPL', quantity: 12, costBasis: 2040 }],
+    })
   })
 })

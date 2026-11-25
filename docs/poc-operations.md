@@ -8,12 +8,18 @@ not a production promotion process.
 The browser connects to one CloudFront HTTPS hostname. CloudFront serves static
 assets from a private S3 bucket and forwards `/api/*` to an API Gateway HTTP
 API. API Gateway invokes the Express Lambda, which validates Cognito access
-tokens and accesses only the PITR-enabled DynamoDB single table.
+tokens. The API stores portfolio records in a PITR-enabled DynamoDB single
+table and uses Amazon Bedrock to generate drafts from submitted descriptions.
 
 The POC includes authentication, portfolios, transactions, holdings, cost-basis
 calculations, and user-initiated portfolio deletion. AI analysis, scheduling,
 notifications, broker access, automatic trading, market prices, and public
 signup are disabled.
+
+Portfolio drafting uses the Lambda execution role to invoke the
+`global.openai.gpt-6.2-sol` inference profile from Stockholm. The profile
+can process submitted descriptions in supported Regions worldwide. Use
+fictional positions in smoke tests and leave out personal identifiers.
 
 ## Provision and deploy
 
@@ -93,7 +99,10 @@ Record the release commit, URL, tester identity, UTC test time, and result.
 4. Submit an invalid transaction and confirm the UI shows a safe error.
 5. Delete User A's portfolio and confirm the UI returns to the empty state.
 6. Confirm the analysis endpoint returns `FEATURE_DISABLED`.
-7. Check Lambda and API Gateway logs contain request IDs and status metadata,
+7. Use **Build with AI** to draft a USD portfolio with 12 AAPL shares and a
+   fictional total original cost of $2,040. Confirm it appears only after
+   saving and that its starting shares and cost match the reviewed draft.
+8. Check Lambda and API Gateway logs contain request IDs and status metadata,
    but no tokens, email addresses, holdings, amounts, or request bodies.
 
 Do not invite additional users until all steps pass and a maintainer owns

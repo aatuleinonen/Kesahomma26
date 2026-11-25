@@ -11,6 +11,7 @@ const { deleteDocument, deleteDocuments, storeDocument } = require("./utils/docu
 const { enqueueDocumentImport } = require("./utils/documentQueue");
 const { validateNewTransaction, calculatePortfolioState, validateTransactionsState } = require("./utils/transactions");
 const { getCanonicalUploadMimeType, validateUploadContent } = require("./utils/uploadValidation");
+const { generatePortfolioDraft, validateDraft } = require("./utils/portfolioDraft");
 
 
 const app = express();
@@ -293,6 +294,25 @@ app.get("/api/portfolios", authMiddleware, async (req, res) => {
   }
 });
 
+// Draft generation is separate from saving and never writes portfolio data.
+app.post("/api/portfolios/draft", authMiddleware, async (req, res) => {
+  const description = typeof req.body?.description === "string" ? req.body.description.trim() : "";
+  if (!description || description.length > 2500) {
+    return res.status(400).json({ message: "Enter a holdings description up to 2,500 characters." });
+  }
+  const modelId = process.env.PORTFOLIO_BEDROCK_MODEL_ID?.trim();
+  if (!modelId) {
+    return res.status(503).json({ message: "AI drafting is unavailable on this server. You can still create a portfolio manually." });
+  }
+  try {
+    const draft = await generatePortfolioDraft(description, modelId);
+    res.set("Cache-Control", "no-store").json({ draft });
+  } catch (error) {
+    logEvent("warn", "portfolio_draft_failed", { requestId: req.requestId, errorName: error.name });
+    res.status(502).json({ message: "AI drafting failed. Try again or create a portfolio manually." });
+  }
+});
+
 // Create a new portfolio
 app.post("/api/portfolios", authMiddleware, async (req, res) => {
   try {
@@ -314,7 +334,40 @@ app.post("/api/portfolios", authMiddleware, async (req, res) => {
       costBasisMethod: costBasisMethod || "FIFO"
     };
 
-    const savedPortfolio = await putPortfolio(userId, portfolio);
+    let initialTransactions = [];
+    if (Object.hasOwn(req.body, "holdings")) {
+      if (typeof portfolioId !== "string" || !/^[a-zA-Z0-9-]{1,80}$/.test(portfolioId)) {
+        return res.status(400).json({ message: "Invalid portfolio ID." });
+      }
+      let draft;
+      try {
+        draft = validateDraft({ name, description, baseCurrency, holdings: req.body.holdings });
+      } catch (error) {
+        return res.status(400).json({ message: error.message });
+      }
+      Object.assign(portfolio, { name: draft.name, baseCurrency: draft.baseCurrency, description: draft.description });
+      const start = Date.now() - draft.holdings.length;
+      initialTransactions = draft.holdings.map(({ ticker, quantity, costBasis }, index) => ({
+        type: "transfer_in",
+        ticker,
+        quantity,
+        price: costBasis / quantity,
+        amount: costBasis,
+        timestamp: new Date(start + index).toISOString()
+      }));
+      const draftHash = crypto.createHash("sha256").update(JSON.stringify({ ...draft, costBasisMethod: portfolio.costBasisMethod })).digest("hex");
+      portfolio.draftHash = draftHash;
+    }
+
+    let savedPortfolio;
+    try {
+      savedPortfolio = await putPortfolio(userId, portfolio, initialTransactions);
+    } catch (error) {
+      if (!portfolio.draftHash || !isPortfolioChildConflict(error)) throw error;
+      const existing = await getPortfolio(userId, portfolioId);
+      if (existing?.draftHash !== portfolio.draftHash || existing.deletionStatus === "DELETING") throw error;
+      savedPortfolio = existing;
+    }
     res.status(201).json({
       status: "success",
       portfolio: savedPortfolio
