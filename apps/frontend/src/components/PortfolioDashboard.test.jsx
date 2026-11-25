@@ -231,4 +231,43 @@ describe('PortfolioDashboard', () => {
       holdings: [{ ticker: 'AAPL', quantity: 12, costBasis: 2040 }],
     })
   })
+
+  it.each(['deposit', 'edit'])('keeps an open %s on its original portfolio when an AI save changes the selection', async action => {
+    const original = { portfolioId: 'original', name: 'Euro holdings', baseCurrency: 'EUR' }
+    const created = { portfolioId: 'created', name: 'US holdings', baseCurrency: 'USD' }
+    const timestamp = '2026-09-10T12:00:12.101Z'
+    const opening = { type: 'deposit', amount: 100, timestamp }
+    const save = Promise.withResolvers()
+    api.getPortfolios.mockResolvedValue({ portfolios: [original] })
+    api.getTransactions.mockImplementation(async id => ({ transactions: id === original.portfolioId ? [opening] : [] }))
+    api.draftPortfolio.mockResolvedValue({
+      draft: { name: created.name, description: '', baseCurrency: created.baseCurrency, holdings: [], notes: '' },
+    })
+    api.createPortfolio.mockReturnValue(save.promise)
+    api.createTransaction.mockResolvedValue({})
+    api.updateTransaction.mockResolvedValue({})
+
+    render(<PortfolioDashboard user={user} signOut={vi.fn()} />)
+    const add = await screen.findByRole('button', { name: /Add Transaction/ })
+    fireEvent.click(screen.getByRole('button', { name: 'Use an example' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Generate draft' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Save portfolio' }))
+
+    fireEvent.click(action === 'edit' ? screen.getByRole('button', { name: 'Edit transaction' }) : add)
+    const dialog = within(screen.getByRole('dialog'))
+    fireEvent.change(dialog.getByLabelText('Amount (€)'), { target: { value: '125' } })
+    await act(async () => save.resolve({ portfolio: created }))
+    expect(screen.getByRole('combobox', { name: 'Portfolio' })).toHaveValue(created.portfolioId)
+    expect(screen.getByRole('dialog')).toHaveAccessibleDescription('For Euro holdings')
+    expect(dialog.getByLabelText('Amount (€)')).toHaveValue(125)
+
+    fireEvent.click(dialog.getByRole('button', { name: action === 'edit' ? 'Save Changes' : 'Record Transaction' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    const transaction = expect.objectContaining({ type: 'deposit', amount: 125 })
+    if (action === 'edit') {
+      expect(api.updateTransaction).toHaveBeenCalledExactlyOnceWith(original.portfolioId, timestamp, transaction)
+    } else {
+      expect(api.createTransaction).toHaveBeenCalledExactlyOnceWith(original.portfolioId, transaction)
+    }
+  })
 })

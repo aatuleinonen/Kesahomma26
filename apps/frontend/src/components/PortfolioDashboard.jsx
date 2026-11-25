@@ -8,6 +8,7 @@ const transactionTimeOptions = {
   year: 'numeric', month: 'short', day: 'numeric',
   hour: 'numeric', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 3
 };
+const currencySymbols = { USD: '$', EUR: '€', GBP: '£', JPY: '¥' };
 
 function toLocalTimestamp(timestamp) {
   const date = new Date(timestamp);
@@ -30,7 +31,7 @@ export default function PortfolioDashboard({ signOut, user }) {
 
   // Modals state
   const [portfolioModalOpen, setPortfolioModalOpen] = useState(false);
-  const [transactionModalOpen, setTransactionModalOpen] = useState(false);
+  const [transactionPortfolio, setTransactionPortfolio] = useState(null);
   const [editingTransaction, setEditingTransaction] = useState(null);
 
   // Form states
@@ -136,7 +137,9 @@ export default function PortfolioDashboard({ signOut, user }) {
   const ledgerBalance = holdingsTotalCost + cashBalance;
   const currentPortfolio = portfolios.find(p => p.portfolioId === currentPortfolioId);
   const currency = currentPortfolio?.baseCurrency || 'EUR';
-  const currencySymbol = { USD: '$', EUR: '€', GBP: '£', JPY: '¥' }[currency] || currency;
+  const currencySymbol = currencySymbols[currency] || currency;
+  const transactionCurrency = transactionPortfolio?.baseCurrency || 'EUR';
+  const transactionCurrencySymbol = currencySymbols[transactionCurrency] || transactionCurrency;
   const money = new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const formatMoney = value => `${currencySymbol}${money.format(value)}`;
 
@@ -224,7 +227,7 @@ export default function PortfolioDashboard({ signOut, user }) {
       originalTimestamp
     });
     setFormError(null);
-    setTransactionModalOpen(true);
+    setTransactionPortfolio(currentPortfolio);
   };
 
   const handleOpenEditTxn = (txn) => {
@@ -239,7 +242,7 @@ export default function PortfolioDashboard({ signOut, user }) {
       originalTimestamp: txn.timestamp
     });
     setFormError(null);
-    setTransactionModalOpen(true);
+    setTransactionPortfolio(currentPortfolio);
   };
 
   const handleDeleteTxn = async (timestamp) => {
@@ -257,6 +260,7 @@ export default function PortfolioDashboard({ signOut, user }) {
 
   const handleTransactionSubmit = async (e) => {
     e.preventDefault();
+    const { portfolioId } = transactionPortfolio;
     setFormError(null);
 
     const { type, ticker, quantity, price, amount, timestamp, originalTimestamp } = transactionForm;
@@ -292,14 +296,14 @@ export default function PortfolioDashboard({ signOut, user }) {
 
       if (editingTransaction) {
         // Edit flow
-        await api.updateTransaction(currentPortfolioId, editingTransaction.timestamp, parsedTxn);
+        await api.updateTransaction(portfolioId, editingTransaction.timestamp, parsedTxn);
       } else {
         // Add flow
-        await api.createTransaction(currentPortfolioId, parsedTxn);
+        await api.createTransaction(portfolioId, parsedTxn);
       }
 
-      await loadPortfolioDetails(currentPortfolioId);
-      setTransactionModalOpen(false);
+      await loadPortfolioDetails(portfolioId);
+      setTransactionPortfolio(null);
     } catch (err) {
       setFormError(err.message || 'Failed to process transaction.');
     } finally {
@@ -509,15 +513,16 @@ export default function PortfolioDashboard({ signOut, user }) {
       )}
 
       {/* --- Add/Edit Transaction Modal (Acceptance Criteria #2) --- */}
-      {transactionModalOpen && (
+      {transactionPortfolio && (
         <div className="modal-overlay">
-          <div className="modal-container" role="dialog" aria-modal="true" aria-labelledby="transaction-ledger-title">
+          <div className="modal-container" role="dialog" aria-modal="true" aria-labelledby="transaction-ledger-title" aria-describedby="transaction-ledger-portfolio">
             <header className="modal-header">
               <h3 id="transaction-ledger-title">{editingTransaction ? 'Edit Transaction Ledger Entry' : 'Record Transaction Ledger Entry'}</h3>
-              <button type="button" className="modal-close-btn" onClick={() => setTransactionModalOpen(false)} aria-label="Close dialog">×</button>
+              <button type="button" className="modal-close-btn" onClick={() => setTransactionPortfolio(null)} aria-label="Close dialog">×</button>
             </header>
             <form onSubmit={handleTransactionSubmit}>
               <div className="modal-body">
+                <p className="muted" id="transaction-ledger-portfolio">For {transactionPortfolio.name}</p>
                 {formError && <div className="form-error">{formError}</div>}
 
                 <div className="form-row">
@@ -583,7 +588,7 @@ export default function PortfolioDashboard({ signOut, user }) {
                         />
                       </div>
                       <div className="form-group">
-                        <label className="form-label" htmlFor="transaction-price">Price per Share ({currencySymbol})</label>
+                        <label className="form-label" htmlFor="transaction-price">Price per Share ({transactionCurrencySymbol})</label>
                         <input id="transaction-price"
                           type="number"
                           step="any"
@@ -600,7 +605,7 @@ export default function PortfolioDashboard({ signOut, user }) {
                 ) : (
                   /* Cash Movements Specific Fields */
                   <div className="form-group">
-                    <label className="form-label" htmlFor="transaction-amount">Amount ({currencySymbol})</label>
+                    <label className="form-label" htmlFor="transaction-amount">Amount ({transactionCurrencySymbol})</label>
                     <input id="transaction-amount"
                       type="number"
                       step="0.01"
@@ -615,7 +620,7 @@ export default function PortfolioDashboard({ signOut, user }) {
                 )}
               </div>
               <footer className="modal-footer">
-                <button type="button" className="btn-secondary" onClick={() => setTransactionModalOpen(false)}>Cancel</button>
+                <button type="button" className="btn-secondary" onClick={() => setTransactionPortfolio(null)}>Cancel</button>
                 <button type="submit" className="btn-primary" disabled={formSubmitting}>
                   {formSubmitting ? 'Saving...' : (editingTransaction ? 'Save Changes' : 'Record Transaction')}
                 </button>
