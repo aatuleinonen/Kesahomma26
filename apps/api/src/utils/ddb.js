@@ -193,9 +193,10 @@ async function getPortfolio(userId, portfolioId) {
  * 
  * @param {string} userId - Cognito User ID (sub)
  * @param {object} portfolio - Portfolio metadata
+ * @param {Array} initialTransactions - Reviewed opening transactions to save atomically
  * @returns {Promise<object>} The saved portfolio item.
  */
-async function putPortfolio(userId, portfolio) {
+async function putPortfolio(userId, portfolio, initialTransactions = []) {
   const pk = `USER#${userId}`;
   const sk = `METADATA#PORTFOLIO#${portfolio.portfolioId || portfolio.id}`;
   const item = {
@@ -205,15 +206,23 @@ async function putPortfolio(userId, portfolio) {
     createdAt: portfolio.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
+  const transactionItems = initialTransactions.map(transaction => ({
+    PK: pk,
+    SK: `PORTFOLIO#${portfolio.portfolioId}#TXN#${transaction.timestamp}`,
+    portfolioId: portfolio.portfolioId,
+    ...transaction,
+    createdAt: item.createdAt
+  }));
 
   if (isMock) {
-    const exists = mockDb.some(i => i.PK === pk && i.SK === sk);
+    const keys = new Set([sk, ...transactionItems.map(transaction => transaction.SK)]);
+    const exists = mockDb.some(i => i.PK === pk && keys.has(i.SK));
     if (exists) {
       const err = new Error("Portfolio already exists");
       err.name = "ConditionalCheckFailedException";
       throw err;
     }
-    mockDb.push(item);
+    mockDb.push(item, ...transactionItems);
     return item;
   }
 
@@ -221,11 +230,18 @@ async function putPortfolio(userId, portfolio) {
     throw new Error("DynamoDB client is not initialized");
   }
 
-  await ddbDocClient.send(new PutCommand({
+  const createItem = Item => ({
     TableName: tableName,
-    Item: item,
+    Item,
     ConditionExpression: "attribute_not_exists(PK) AND attribute_not_exists(SK)"
-  }));
+  });
+  if (transactionItems.length) {
+    await ddbDocClient.send(new TransactWriteCommand({
+      TransactItems: [item, ...transactionItems].map(record => ({ Put: createItem(record) }))
+    }));
+  } else {
+    await ddbDocClient.send(new PutCommand(createItem(item)));
+  }
   return item;
 }
 

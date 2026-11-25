@@ -48,6 +48,12 @@ export const api = {
       body: JSON.stringify(portfolio)
     });
   },
+  draftPortfolio(description) {
+    return request('/api/portfolios/draft', {
+      method: 'POST',
+      body: JSON.stringify({ description })
+    });
+  },
   deletePortfolio(portfolioId) {
     return request(`/api/portfolios/${portfolioId}`, {
       method: "DELETE"

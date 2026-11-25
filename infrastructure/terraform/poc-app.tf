@@ -3,6 +3,9 @@
 locals {
   resource_prefix                   = "kesahomma26-${var.environment}"
   document_import_max_receive_count = 3
+  portfolio_foundation_model_id     = "openai.gpt-6.2-sol"
+  portfolio_inference_profile_id    = "global.${local.portfolio_foundation_model_id}"
+  portfolio_inference_profile_arn   = "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/${local.portfolio_inference_profile_id}"
   application_source_files = sort(concat(
     [
       for file in fileset("${path.root}/../../apps", "**") :
@@ -93,6 +96,41 @@ resource "aws_iam_role_policy" "api_lambda" {
         ]
       },
       {
+        Sid      = "InvokePortfolioInferenceProfile"
+        Effect   = "Allow"
+        Action   = "bedrock:InvokeModel"
+        Resource = local.portfolio_inference_profile_arn
+        Condition = {
+          StringEquals = {
+            "aws:RequestedRegion" = var.aws_region
+          }
+        }
+      },
+      {
+        Sid      = "InvokePortfolioModelInSourceRegion"
+        Effect   = "Allow"
+        Action   = "bedrock:InvokeModel"
+        Resource = "arn:aws:bedrock:${var.aws_region}::foundation-model/${local.portfolio_foundation_model_id}"
+        Condition = {
+          StringEquals = {
+            "aws:RequestedRegion"         = var.aws_region
+            "bedrock:InferenceProfileArn" = local.portfolio_inference_profile_arn
+          }
+        }
+      },
+      {
+        Sid      = "InvokePortfolioModelGlobally"
+        Effect   = "Allow"
+        Action   = "bedrock:InvokeModel"
+        Resource = "arn:aws:bedrock:::foundation-model/${local.portfolio_foundation_model_id}"
+        Condition = {
+          StringEquals = {
+            "aws:RequestedRegion"         = "unspecified"
+            "bedrock:InferenceProfileArn" = local.portfolio_inference_profile_arn
+          }
+        }
+      },
+      {
         Sid    = "WriteXRayTelemetry"
         Effect = "Allow"
         Action = [
@@ -118,7 +156,7 @@ resource "aws_lambda_function" "api" {
   runtime                        = "nodejs24.x"
   architectures                  = ["arm64"]
   memory_size                    = 256
-  timeout                        = 15
+  timeout                        = 28
   reserved_concurrent_executions = 5
 
   filename         = data.archive_file.api_placeholder.output_path
@@ -126,13 +164,14 @@ resource "aws_lambda_function" "api" {
 
   environment {
     variables = {
-      COGNITO_CLIENT_ID         = aws_cognito_user_pool_client.user_pool_client.id
-      COGNITO_USER_POOL_ID      = aws_cognito_user_pool.user_pool.id
-      DYNAMODB_TABLE_NAME       = aws_dynamodb_table.single_table.name
-      DOCUMENT_IMPORT_BUCKET    = aws_s3_bucket.document_imports.id
-      DOCUMENT_IMPORT_QUEUE_URL = aws_sqs_queue.document_imports.url
-      ENABLE_AI_ANALYSIS        = "false"
-      NODE_ENV                  = "production"
+      COGNITO_CLIENT_ID          = aws_cognito_user_pool_client.user_pool_client.id
+      COGNITO_USER_POOL_ID       = aws_cognito_user_pool.user_pool.id
+      DYNAMODB_TABLE_NAME        = aws_dynamodb_table.single_table.name
+      DOCUMENT_IMPORT_BUCKET     = aws_s3_bucket.document_imports.id
+      DOCUMENT_IMPORT_QUEUE_URL  = aws_sqs_queue.document_imports.url
+      ENABLE_AI_ANALYSIS         = "false"
+      NODE_ENV                   = "production"
+      PORTFOLIO_BEDROCK_MODEL_ID = local.portfolio_inference_profile_id
     }
   }
 
@@ -369,7 +408,7 @@ resource "aws_apigatewayv2_integration" "api_lambda" {
   integration_uri        = aws_lambda_function.api.invoke_arn
   integration_method     = "POST"
   payload_format_version = "2.0"
-  timeout_milliseconds   = 15000
+  timeout_milliseconds   = 29000
 }
 
 resource "aws_apigatewayv2_route" "api_proxy" {

@@ -9,7 +9,18 @@ This repository is configured as a monorepo containing our application packages 
 
 The first deployable release is an invitation-only portfolio tracker. It
 supports authenticated portfolio and transaction management, calculated
-holdings, and portfolio deletion. AI analysis and public signup are disabled.
+holdings, and portfolio deletion. The portfolio dashboard charts cash and
+holding cost basis from the transaction ledger.
+
+**Build with AI** uses Amazon Bedrock with the
+`global.openai.gpt-6.2-sol` inference profile. Terraform gives the POC API
+Lambda access through its execution role. For local development, set
+`PORTFOLIO_BEDROCK_MODEL_ID` to that profile ID and use AWS credentials
+with Bedrock invocation permission in `eu-north-1`.
+
+Bedrock can process draft descriptions in supported Regions worldwide.
+Review the currency, share quantities, and original costs before saving.
+Reviewed holdings become opening transfer-in transactions.
 
 See [Portfolio POC operations](docs/poc-operations.md) for architecture,
 deployment, tester invitations, the data notice, smoke tests, restore, and

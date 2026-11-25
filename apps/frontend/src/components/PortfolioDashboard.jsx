@@ -1,5 +1,19 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { api } from '../utils/api';
+import PortfolioAssistant from './PortfolioAssistant';
+import { PortfolioHistory } from './PortfolioHistory';
+import { summarizeLedger } from '../utils/ledger';
+
+const transactionTimeOptions = {
+  year: 'numeric', month: 'short', day: 'numeric',
+  hour: 'numeric', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 3
+};
+const currencySymbols = { USD: '$', EUR: '€', GBP: '£', JPY: '¥' };
+
+function toLocalTimestamp(timestamp) {
+  const date = new Date(timestamp);
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, -1);
+}
 
 export default function PortfolioDashboard({ signOut, user }) {
   // State
@@ -9,11 +23,15 @@ export default function PortfolioDashboard({ signOut, user }) {
   const [cashBalance, setCashBalance] = useState(0);
   const [transactions, setTransactions] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [detailsId, setDetailsId] = useState('');
+  const latestDetailsRequest = useRef(0);
+  const selectedPortfolioId = useRef('');
+  const pendingPortfolioList = useRef(null);
   const [error, setError] = useState(null);
 
   // Modals state
   const [portfolioModalOpen, setPortfolioModalOpen] = useState(false);
-  const [transactionModalOpen, setTransactionModalOpen] = useState(false);
+  const [transactionPortfolio, setTransactionPortfolio] = useState(null);
   const [editingTransaction, setEditingTransaction] = useState(null);
 
   // Form states
@@ -29,54 +47,74 @@ export default function PortfolioDashboard({ signOut, user }) {
     quantity: '',
     price: '',
     amount: '',
-    timestamp: ''
+    timestamp: '',
+    originalTimestamp: ''
   });
 
   const [formError, setFormError] = useState(null);
   const [formSubmitting, setFormSubmitting] = useState(false);
 
-  const loadPortfolios = async () => {
+  const loadPortfolios = async (deletedPortfolioId) => {
+    const selectedAtStart = selectedPortfolioId.current;
+    const changes = pendingPortfolioList.current?.changes ?? new Map();
+    if (deletedPortfolioId) changes.set(deletedPortfolioId, null);
+    const request = { changes };
+    pendingPortfolioList.current = request;
     try {
       setLoading(true);
       setError(null);
       const res = await api.getPortfolios();
-      const list = res.portfolios || [];
-      setPortfolios(list);
-      if (list.length > 0) {
-        // Default to first portfolio
-        setCurrentPortfolioId(list[0].portfolioId);
-      } else {
-        setCurrentPortfolioId('');
-        setHoldings({});
-        setCashBalance(0);
-        setTransactions([]);
-        setLoading(false);
+      if (request !== pendingPortfolioList.current) return;
+      const listedPortfolios = new Map((res.portfolios || []).map(portfolio => [portfolio.portfolioId, portfolio]));
+      // The response may be a snapshot from before a concurrent save or deletion.
+      for (const [id, portfolio] of changes) {
+        if (portfolio === null) listedPortfolios.delete(id);
+        else if (!listedPortfolios.has(id)) listedPortfolios.set(id, portfolio);
       }
-    } catch (err) {
-      console.error(err);
+      const list = [...listedPortfolios.values()];
+      setPortfolios(list);
+      const selected = selectedPortfolioId.current;
+      const next = list.some(portfolio => portfolio.portfolioId === selected)
+        ? selected
+        : list[0]?.portfolioId || '';
+      if (selected !== next) {
+        latestDetailsRequest.current++;
+        selectedPortfolioId.current = next;
+        setDetailsId('');
+        setCurrentPortfolioId(next);
+      }
+      if (!next || (selected === next && selectedAtStart === selected)) setLoading(false);
+    } catch {
+      if (request !== pendingPortfolioList.current) return;
       setError('Failed to fetch portfolios. Please check if the API backend is running.');
       setLoading(false);
+    } finally {
+      if (request === pendingPortfolioList.current) pendingPortfolioList.current = null;
     }
   };
 
   const loadPortfolioDetails = async (portfolioId) => {
+    if (portfolioId !== selectedPortfolioId.current) return;
+    const request = ++latestDetailsRequest.current;
     try {
       setLoading(true);
       setError(null);
-      
       const [holdingsRes, transactionsRes] = await Promise.all([
         api.getHoldings(portfolioId),
         api.getTransactions(portfolioId)
       ]);
 
+      if (request !== latestDetailsRequest.current) return;
+      setDetailsId(portfolioId);
       setHoldings(holdingsRes.holdings || {});
       setCashBalance(holdingsRes.cashBalance ?? 0);
       setTransactions(transactionsRes.transactions || []);
-    } catch (err) {
-      console.error(err);
+    } catch {
+      if (request !== latestDetailsRequest.current) return;
+      setDetailsId('');
       setError('Failed to load portfolio details.');
     } finally {
-      setLoading(false);
+      if (request === latestDetailsRequest.current) setLoading(false);
     }
   };
 
@@ -94,45 +132,37 @@ export default function PortfolioDashboard({ signOut, user }) {
     }
   }, [currentPortfolioId]);
 
-  // Derived metrics from transactions
-  const holdingsMetrics = (() => {
-    const metrics = {};
-    const sorted = [...transactions].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
-    
-    for (const t of sorted) {
-      const type = t.type.toLowerCase();
-      const ticker = t.ticker;
-      const quantity = parseFloat(t.quantity) || 0;
-      const price = parseFloat(t.price) || 0;
-      let amount = parseFloat(t.amount);
-      if (isNaN(amount)) amount = quantity * price;
-
-      if (type === 'buy' || type === 'transfer_in') {
-        if (!metrics[ticker]) {
-          metrics[ticker] = { quantity: 0, totalCost: 0, averageCost: 0 };
-        }
-        metrics[ticker].quantity += quantity;
-        metrics[ticker].totalCost += amount;
-        metrics[ticker].averageCost = metrics[ticker].totalCost / metrics[ticker].quantity;
-      } else if (type === 'sell') {
-        if (metrics[ticker]) {
-          metrics[ticker].quantity -= quantity;
-          if (metrics[ticker].quantity <= 1e-9) {
-            delete metrics[ticker];
-          } else {
-            metrics[ticker].totalCost = metrics[ticker].quantity * metrics[ticker].averageCost;
-          }
-        }
-      }
-    }
-    return metrics;
-  })();
-
-  // Calculate total value of holdings + cash
-  const holdingsTotalCost = Object.values(holdingsMetrics).reduce((sum, h) => sum + h.totalCost, 0);
-  const portfolioTotalValue = parseFloat((holdingsTotalCost + cashBalance).toFixed(2));
+  const { holdings: holdingsMetrics, history } = summarizeLedger(transactions);
+  const holdingsTotalCost = [...holdingsMetrics.values()].reduce((sum, holding) => sum + holding.totalCost, 0);
+  const ledgerBalance = holdingsTotalCost + cashBalance;
   const currentPortfolio = portfolios.find(p => p.portfolioId === currentPortfolioId);
-  const currencySymbol = currentPortfolio?.baseCurrency === 'USD' ? '$' : '€';
+  const currency = currentPortfolio?.baseCurrency || 'EUR';
+  const currencySymbol = currencySymbols[currency] || currency;
+  const transactionCurrency = transactionPortfolio?.baseCurrency || 'EUR';
+  const transactionCurrencySymbol = currencySymbols[transactionCurrency] || transactionCurrency;
+  const money = new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const formatMoney = value => `${currencySymbol}${money.format(value)}`;
+
+  function selectPortfolio(portfolioId) {
+    if (portfolioId === selectedPortfolioId.current) return;
+    latestDetailsRequest.current++;
+    selectedPortfolioId.current = portfolioId;
+    setError(null);
+    setDetailsId('');
+    setLoading(true);
+    setCurrentPortfolioId(portfolioId);
+  }
+
+  function portfolioCreated(portfolio) {
+    pendingPortfolioList.current?.changes.set(portfolio.portfolioId, portfolio);
+    setPortfolios(previous => [...previous.filter(item => item.portfolioId !== portfolio.portfolioId), portfolio]);
+    selectPortfolio(portfolio.portfolioId);
+  }
+
+  function openPortfolioForm() {
+    setFormError(null);
+    setPortfolioModalOpen(true);
+  }
 
   // Portfolio handlers
   const handleCreatePortfolio = async (e) => {
@@ -144,15 +174,13 @@ export default function PortfolioDashboard({ signOut, user }) {
     try {
       setFormError(null);
       setFormSubmitting(true);
-      const portfolioId = 'portfolio-' + Date.now();
+      const portfolioId = `portfolio-${crypto.randomUUID()}`;
       const res = await api.createPortfolio({
         portfolioId,
         ...portfolioForm
       });
-      
-      const newPortfolio = res.portfolio;
-      setPortfolios(prev => [...prev, newPortfolio]);
-      setCurrentPortfolioId(newPortfolio.portfolioId);
+
+      portfolioCreated(res.portfolio);
       setPortfolioForm({ name: '', description: '', baseCurrency: 'EUR' });
       setPortfolioModalOpen(false);
     } catch (err) {
@@ -164,6 +192,7 @@ export default function PortfolioDashboard({ signOut, user }) {
 
   const handleDeletePortfolio = async () => {
     if (!currentPortfolio) return;
+    const { portfolioId } = currentPortfolio;
     const confirmed = window.confirm(
       `Delete "${currentPortfolio.name}" and all of its transactions? This cannot be undone in the application.`
     );
@@ -172,8 +201,9 @@ export default function PortfolioDashboard({ signOut, user }) {
     try {
       setError(null);
       setLoading(true);
-      await api.deletePortfolio(currentPortfolio.portfolioId);
-      await loadPortfolios();
+      await api.deletePortfolio(portfolioId);
+      setPortfolios(previous => previous.filter(portfolio => portfolio.portfolioId !== portfolioId));
+      await loadPortfolios(portfolioId);
     } catch (err) {
       setError(err.message || 'Failed to delete portfolio.');
       setLoading(false);
@@ -184,9 +214,8 @@ export default function PortfolioDashboard({ signOut, user }) {
   const handleOpenAddTxn = () => {
     setEditingTransaction(null);
 
-    const now = new Date();
-    const tzOffset = now.getTimezoneOffset() * 60000;
-    const localNow = new Date(now.getTime() - tzOffset);
+    const latest = transactions.reduce((time, txn) => Math.max(time, Date.parse(txn.timestamp) || 0), 0);
+    const originalTimestamp = new Date(Math.max(Date.now(), latest + 1)).toISOString();
 
     setTransactionForm({
       type: 'deposit',
@@ -194,31 +223,26 @@ export default function PortfolioDashboard({ signOut, user }) {
       quantity: '',
       price: '',
       amount: '',
-      timestamp: localNow.toISOString().substring(0, 16) // format for datetime-local (local time)
+      timestamp: toLocalTimestamp(originalTimestamp),
+      originalTimestamp
     });
     setFormError(null);
-    setTransactionModalOpen(true);
+    setTransactionPortfolio(currentPortfolio);
   };
 
   const handleOpenEditTxn = (txn) => {
     setEditingTransaction(txn);
-    // Convert timestamp ISO string to local datetime format (YYYY-MM-DDTHH:mm)
-    const localDate = new Date(txn.timestamp);
-    // Adjust timezone offset to preserve date/time correctly
-    const tzOffset = localDate.getTimezoneOffset() * 60000;
-    const adjustedDate = new Date(localDate.getTime() - tzOffset);
-    const dateString = adjustedDate.toISOString().substring(0, 16);
-
     setTransactionForm({
-      type: txn.type,
+      type: txn.type.toLowerCase(),
       ticker: txn.ticker || '',
       quantity: txn.quantity !== undefined ? txn.quantity.toString() : '',
       price: txn.price !== undefined ? txn.price.toString() : '',
       amount: txn.amount !== undefined ? txn.amount.toString() : '',
-      timestamp: dateString
+      timestamp: toLocalTimestamp(txn.timestamp),
+      originalTimestamp: txn.timestamp
     });
     setFormError(null);
-    setTransactionModalOpen(true);
+    setTransactionPortfolio(currentPortfolio);
   };
 
   const handleDeleteTxn = async (timestamp) => {
@@ -236,10 +260,11 @@ export default function PortfolioDashboard({ signOut, user }) {
 
   const handleTransactionSubmit = async (e) => {
     e.preventDefault();
+    const { portfolioId } = transactionPortfolio;
     setFormError(null);
-    
-    const { type, ticker, quantity, price, amount, timestamp } = transactionForm;
-    
+
+    const { type, ticker, quantity, price, amount, timestamp, originalTimestamp } = transactionForm;
+
     // Validations
     if (['buy', 'sell', 'transfer_in'].includes(type)) {
       if (!ticker.trim()) return setFormError('Ticker is required for trades');
@@ -253,10 +278,11 @@ export default function PortfolioDashboard({ signOut, user }) {
 
     try {
       setFormSubmitting(true);
-      
+
       const parsedTxn = {
         type,
-        timestamp: timestamp ? new Date(timestamp).toISOString() : new Date().toISOString()
+        // Keep the original instant when the local time has not been edited, including during DST overlaps.
+        timestamp: timestamp === toLocalTimestamp(originalTimestamp) ? originalTimestamp : new Date(timestamp).toISOString()
       };
 
       if (['buy', 'sell', 'transfer_in'].includes(type)) {
@@ -270,14 +296,14 @@ export default function PortfolioDashboard({ signOut, user }) {
 
       if (editingTransaction) {
         // Edit flow
-        await api.updateTransaction(currentPortfolioId, editingTransaction.timestamp, parsedTxn);
+        await api.updateTransaction(portfolioId, editingTransaction.timestamp, parsedTxn);
       } else {
         // Add flow
-        await api.createTransaction(currentPortfolioId, parsedTxn);
+        await api.createTransaction(portfolioId, parsedTxn);
       }
 
-      await loadPortfolioDetails(currentPortfolioId);
-      setTransactionModalOpen(false);
+      await loadPortfolioDetails(portfolioId);
+      setTransactionPortfolio(null);
     } catch (err) {
       setFormError(err.message || 'Failed to process transaction.');
     } finally {
@@ -287,261 +313,141 @@ export default function PortfolioDashboard({ signOut, user }) {
 
   return (
     <div className="dashboard-container">
-      {/* Header */}
       <header className="dashboard-header">
-        <div className="logo-container">
-          <span className="logo-icon">💼</span>
-          <span className="logo-text">PortfolioOverview</span>
-        </div>
-
-        {portfolios.length > 0 && (
-          <div className="portfolio-selector-container">
-            <span className="form-label" style={{ margin: 0, display: 'inline' }}>Portfolio:</span>
-            <select
-              className="portfolio-select"
-              value={currentPortfolioId}
-              onChange={(e) => setCurrentPortfolioId(e.target.value)}
-            >
-              {portfolios.map(p => (
-                <option key={p.portfolioId} value={p.portfolioId}>{p.name}</option>
-              ))}
-            </select>
-          </div>
-        )}
-
-        <div className="user-profile">
-          <button className="btn-primary" onClick={() => setPortfolioModalOpen(true)}>
-            <span>➕</span> New Portfolio
-          </button>
-          {currentPortfolio && (
-            <button className="btn-danger" onClick={handleDeletePortfolio}>
-              Delete Portfolio
-            </button>
-          )}
-          <span className="user-email" title="Logged in as">
-            {user?.signInDetails?.loginId || user?.username || "Authenticated User"}
-          </span>
-          <button className="sign-out-btn" onClick={signOut}>
-            Sign Out
-          </button>
+        <div className="brand"><span className="brand-mark" aria-hidden="true">▂▅▇</span> PortfolioOverview</div>
+        <div className="account">
+          <span className="user-email">{user?.signInDetails?.loginId || user?.username}</span>
+          <button className="btn-secondary" onClick={signOut}>Sign Out</button>
         </div>
       </header>
 
-      {/* Main Content */}
       <main className="dashboard-content">
-        {loading && portfolios.length === 0 ? (
-          <div className="loading-container">
-            <div className="spinner"></div>
-            <p>Loading portfolios...</p>
+        <div className="workspace-heading">
+          <h1>Portfolios</h1>
+          <div className="workspace-actions">
+            {portfolios.length > 0 && (
+              <select className="form-select portfolio-select" aria-label="Portfolio" value={currentPortfolioId} onChange={e => selectPortfolio(e.target.value)}>
+                {portfolios.map(portfolio => <option key={portfolio.portfolioId} value={portfolio.portfolioId}>{portfolio.name}</option>)}
+              </select>
+            )}
+            <button className="btn-secondary" onClick={openPortfolioForm}>+ New Portfolio</button>
           </div>
-        ) : error && portfolios.length === 0 ? (
-          <div className="empty-state-card">
-            <div className="empty-state-icon">⚠️</div>
-            <h2>Service Unavailable</h2>
-            <p>{error}</p>
-            <button className="btn-primary" onClick={loadPortfolios}>Retry</button>
-          </div>
-        ) : portfolios.length === 0 ? (
-          /* EMPTY STATE (Acceptance Criteria #3) */
-          <div className="empty-state-card">
-            <div className="empty-state-icon">📈</div>
-            <h2>No Portfolios Found</h2>
-            <p>Create your first investment portfolio to start tracking your stock holdings, cash movements, and allocation details.</p>
-            <button className="btn-primary" onClick={() => setPortfolioModalOpen(true)}>
-              <span>➕</span> Create Your First Portfolio
-            </button>
-          </div>
-        ) : (
-          /* VIEW DATA STATE (Acceptance Criteria #1) */
-          <>
-            <section className="welcome-banner">
-              <span className="badge">{currentPortfolio?.baseCurrency || 'EUR'} Account</span>
-              <h1>{currentPortfolio?.name || 'My Portfolio'}</h1>
-              <p>{currentPortfolio?.description || 'No description provided.'}</p>
-            </section>
+        </div>
 
-            {/* Statistics Summary */}
-            <div className="stats-grid">
-              <div className="stat-card">
-                <span className="stat-icon">💰</span>
-                <h3>Portfolio Cost Basis</h3>
-                <div className="stat-value">
-                  {currencySymbol}{holdingsTotalCost.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+        <div className="workspace-grid">
+          <div className="workspace-main">
+            {loading && !currentPortfolio ? (
+              <section className="dashboard-card state-card" role="status">Loading portfolios…</section>
+            ) : error && !currentPortfolio ? (
+              <section className="dashboard-card state-card" role="alert">
+                <h2>Service Unavailable</h2>
+                <p>{error}</p>
+                <button className="btn-secondary" onClick={() => loadPortfolios()}>Retry</button>
+              </section>
+            ) : !currentPortfolio ? (
+              <section className="dashboard-card empty-state-card">
+                <div className="empty-graphic" aria-hidden="true"><i /><i /><i /><i /><i /><i /><i /></div>
+                <h2>No Portfolios Found</h2>
+                <p>Track your holdings, cash, and transaction history in one place.</p>
+                <div className="workspace-actions">
+                  <a className="btn-primary" href="#portfolio-assistant">Build with AI <span aria-hidden="true">→</span></a>
+                  <button className="btn-secondary" onClick={openPortfolioForm}>Create Your First Portfolio</button>
                 </div>
-                <div className="stat-trend neutral">Valued in {currentPortfolio?.baseCurrency}</div>
-              </div>
-              <div className="stat-card">
-                <span className="stat-icon">💶</span>
-                <h3>Cash Balance</h3>
-                <div className="stat-value">
-                  {currencySymbol}{cashBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                </div>
-                <div className="stat-trend neutral">Available for trading</div>
-              </div>
-              <div className="stat-card">
-                <span className="stat-icon">📊</span>
-                <h3>Total Assets</h3>
-                <div className="stat-value">
-                  {Object.keys(holdings).length}
-                </div>
-                <div className="stat-trend neutral">Distinct assets held</div>
-              </div>
-              <div className="stat-card">
-                <span className="stat-icon">📝</span>
-                <h3>Ledger Entries</h3>
-                <div className="stat-value">
-                  {transactions.length}
-                </div>
-                <div className="stat-trend neutral">Historical ledger entries</div>
-              </div>
-            </div>
-
-            {loading ? (
-              <div className="loading-container">
-                <div className="spinner"></div>
-                <p>Loading portfolio data...</p>
-              </div>
+              </section>
             ) : (
-              <div className="dashboard-grid-layout">
-                {/* Holdings & Allocation List */}
-                <div className="dashboard-card">
+              <>
+                <section className="dashboard-card overview">
                   <div className="dashboard-card-header">
-                    <h2><span>📁</span> Asset Allocations</h2>
+                    <div>
+                      <h2>{currentPortfolio.name}</h2>
+                      {currentPortfolio.description && <p>{currentPortfolio.description}</p>}
+                    </div>
+                    <span className="currency-tag">{currency}</span>
                   </div>
-                  
-                  {Object.keys(holdings).length === 0 ? (
-                    <p className="no-transactions">No stock holdings yet. Add a deposit and trade transactions to start.</p>
+                  {error && <p className="form-error" role="alert">{error}</p>}
+                  {loading ? <p role="status">Loading portfolio data…</p> : detailsId !== currentPortfolioId ? (
+                    <button className="btn-secondary" onClick={() => loadPortfolioDetails(currentPortfolioId)}>Retry</button>
                   ) : (
-                    <div className="holdings-list">
-                      {Object.entries(holdings).map(([ticker, qty]) => {
-                        const metric = holdingsMetrics[ticker] || { averageCost: 0, totalCost: 0 };
-                        const allocPct = portfolioTotalValue > 0 ? ((metric.totalCost / portfolioTotalValue) * 100).toFixed(1) : 0;
-                        
+                    <>
+                      <div className="balance-label">Ledger balance</div>
+                      <div className="balance-value">{formatMoney(ledgerBalance)}</div>
+                      <p className="chart-caption">Cash plus holding cost basis, by day with activity</p>
+                      <PortfolioHistory history={history} formatMoney={formatMoney} />
+                      <dl className="summary-grid">
+                        <div><dt>Holding cost basis</dt><dd>{formatMoney(holdingsTotalCost)}</dd></div>
+                        <div><dt>Cash balance</dt><dd>{formatMoney(cashBalance)}</dd></div>
+                        <div><dt>Positions</dt><dd>{Object.keys(holdings).length}</dd></div>
+                      </dl>
+                    </>
+                  )}
+                </section>
+
+                {!loading && detailsId === currentPortfolioId && (
+                  <>
+                    <section className="dashboard-card">
+                      <div className="dashboard-card-header"><h2>Holdings</h2><span className="muted">Allocation by cost</span></div>
+                      {!Object.keys(holdings).length && <p className="muted">No positions yet. Record a trade or transfer to add one.</p>}
+                      {Object.entries(holdings).map(([ticker, quantity]) => {
+                        const metric = holdingsMetrics.get(ticker) || { averageCost: 0, totalCost: 0 };
+                        const allocation = holdingsTotalCost > 0 ? metric.totalCost / holdingsTotalCost * 100 : 0;
                         return (
                           <div key={ticker} className="holding-item">
-                            <div className="holding-info-row">
-                              <span className="holding-ticker">{ticker}</span>
-                              <span className="holding-val">{currencySymbol}{metric.totalCost.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                            <div className="holding-identity">
+                              <span className="ticker-icon" aria-hidden="true">{ticker[0]}</span>
+                              <div><strong>{ticker}</strong><span className="muted">{quantity.toLocaleString()} shares</span></div>
                             </div>
-                            <div className="holding-info-row">
-                              <span className="holding-qty">{qty.toLocaleString()} shares</span>
-                              <span className="holding-avg-cost">Avg: {currencySymbol}{metric.averageCost.toFixed(2)}</span>
-                            </div>
-                            <div className="allocation-bar-container">
-                              <div className="allocation-bar" style={{ width: `${allocPct}%` }}></div>
-                            </div>
-                            <div className="holding-info-row" style={{ fontSize: '0.75rem', marginTop: '-2px' }}>
-                              <span style={{ color: 'var(--text-secondary)' }}>Allocation</span>
-                              <span style={{ color: 'var(--accent-color)', fontWeight: 600 }}>{allocPct}%</span>
+                            <div className="holding-cost"><strong className="holding-val">{formatMoney(metric.totalCost)}</strong><span className="muted">Avg: {formatMoney(metric.averageCost)}</span></div>
+                            <div className="allocation">
+                              <div className="allocation-track"><div style={{ width: `${allocation}%` }} /></div>
+                              <span>{allocation.toFixed(1)}%</span>
                             </div>
                           </div>
                         );
                       })}
+                    </section>
 
-                      {cashBalance > 0 && (
-                        <div className="holding-item" style={{ borderStyle: 'dashed' }}>
-                          <div className="holding-info-row">
-                            <span className="holding-ticker" style={{ color: 'var(--text-secondary)' }}>CASH</span>
-                            <span className="holding-val">{currencySymbol}{cashBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-                          </div>
-                          <div className="allocation-bar-container">
-                            <div className="allocation-bar" style={{ 
-                              width: `${portfolioTotalValue > 0 ? ((cashBalance / portfolioTotalValue) * 100).toFixed(1) : 0}%`,
-                              background: 'linear-gradient(90deg, #c5c6c7 0%, var(--text-primary) 100%)'
-                            }}></div>
-                          </div>
-                          <div className="holding-info-row" style={{ fontSize: '0.75rem', marginTop: '-2px' }}>
-                            <span style={{ color: 'var(--text-secondary)' }}>Cash allocation</span>
-                            <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>
-                              {portfolioTotalValue > 0 ? ((cashBalance / portfolioTotalValue) * 100).toFixed(1) : 0}%
-                            </span>
-                          </div>
+                    <section className="dashboard-card">
+                      <div className="dashboard-card-header">
+                        <h2>Transaction History</h2>
+                        <button className="btn-secondary" onClick={handleOpenAddTxn}>+ Add Transaction</button>
+                      </div>
+                      {transactions.length === 0 ? <p className="muted">This portfolio has no transactions.</p> : (
+                        <div className="table-responsive">
+                          <table className="custom-table">
+                            <thead><tr><th>Date &amp; time</th><th>Type</th><th>Ticker</th><th>Shares</th><th>Price</th><th>Amount</th><th>Actions</th></tr></thead>
+                            <tbody>
+                              {[...transactions].sort((a, b) => b.timestamp.localeCompare(a.timestamp)).map(t => {
+                                const type = t.type.toLowerCase();
+                                const isTrade = ['buy', 'sell', 'transfer_in'].includes(type);
+                                const total = t.amount ?? (Number(t.quantity) * Number(t.price));
+                                return (
+                                  <tr key={t.timestamp}>
+                                    <td><time dateTime={t.timestamp}>{new Date(t.timestamp).toLocaleString(undefined, transactionTimeOptions)}</time></td>
+                                    <td><span className={`txn-badge ${type}`}>{type.replace('_', ' ')}</span></td>
+                                    <td>{t.ticker || '—'}</td>
+                                    <td>{isTrade ? Number(t.quantity).toLocaleString() : '—'}</td>
+                                    <td>{isTrade ? formatMoney(t.price) : '—'}</td>
+                                    <td>{formatMoney(total)}</td>
+                                    <td><div className="table-actions">
+                                      <button type="button" className="text-button" onClick={() => handleOpenEditTxn(t)} aria-label="Edit transaction">Edit</button>
+                                      <button type="button" className="text-button danger" onClick={() => handleDeleteTxn(t.timestamp)} aria-label="Delete transaction">Delete</button>
+                                    </div></td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
                         </div>
                       )}
-                    </div>
-                  )}
-                </div>
-
-                {/* Transaction Ledger Card */}
-                <div className="dashboard-card" style={{ gridColumn: 'span 1' }}>
-                  <div className="dashboard-card-header">
-                    <h2><span>📝</span> Transaction History</h2>
-                    <button className="btn-primary" onClick={handleOpenAddTxn}>
-                      <span>➕</span> Add Transaction
-                    </button>
-                  </div>
-
-                  {transactions.length === 0 ? (
-                    <div className="no-transactions">
-                      <p>This portfolio has no transactions.</p>
-                      <button className="btn-primary" style={{ marginTop: '1rem' }} onClick={handleOpenAddTxn}>
-                        Record Deposit
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="table-responsive">
-                      <table className="custom-table">
-                        <thead>
-                          <tr>
-                            <th>Date</th>
-                            <th>Type</th>
-                            <th>Ticker</th>
-                            <th>Quantity</th>
-                            <th>Price</th>
-                            <th>Total Cost</th>
-                            <th style={{ textAlign: 'right' }}>Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {[...transactions].reverse().map((t) => {
-                            const isTrade = ['buy', 'sell', 'transfer_in'].includes(t.type);
-                            const totalAmount = t.amount ?? (parseFloat(t.quantity) * parseFloat(t.price));
-                            return (
-                              <tr key={t.timestamp}>
-                                <td>{new Date(t.timestamp).toLocaleDateString()} {new Date(t.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</td>
-                                <td>
-                                  <span className={`txn-badge ${t.type.toLowerCase()}`}>
-                                    {t.type}
-                                  </span>
-                                </td>
-                                <td style={{ fontWeight: 'bold' }}>{t.ticker || '-'}</td>
-                                <td>{isTrade ? parseFloat(t.quantity).toLocaleString() : '-'}</td>
-                                <td>{isTrade ? `${currencySymbol}${parseFloat(t.price).toFixed(2)}` : '-'}</td>
-                                <td style={{ fontWeight: 600 }}>{currencySymbol}{totalAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
-                                <td style={{ textAlign: 'right' }}>
-                                  <div className="table-actions" style={{ justifyContent: 'flex-end' }}>
-                                    <button 
-                                      type="button"
-                                      className="action-btn edit" 
-                                      onClick={() => handleOpenEditTxn(t)}
-                                      aria-label="Edit transaction"
-                                      title="Edit entry"
-                                    >
-                                      ✏️
-                                    </button>
-                                    <button 
-                                      type="button"
-                                      className="action-btn delete" 
-                                      onClick={() => handleDeleteTxn(t.timestamp)}
-                                      aria-label="Delete transaction"
-                                      title="Delete entry"
-                                    >
-                                      🗑️
-                                    </button>
-                                  </div>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </div>
-              </div>
+                    </section>
+                  </>
+                )}
+                <button type="button" className="text-button danger delete-portfolio" onClick={handleDeletePortfolio} disabled={loading}>Delete Portfolio</button>
+              </>
             )}
-          </>
-        )}
+          </div>
+          <PortfolioAssistant onCreated={portfolioCreated} />
+        </div>
       </main>
 
       {/* --- Create/Edit Portfolio Modal --- */}
@@ -555,10 +461,10 @@ export default function PortfolioDashboard({ signOut, user }) {
             <form onSubmit={handleCreatePortfolio}>
               <div className="modal-body">
                 {formError && <div className="form-error">{formError}</div>}
-                
+
                 <div className="form-group">
-                  <label className="form-label">Portfolio Name</label>
-                  <input
+                  <label className="form-label" htmlFor="portfolio-name">Portfolio Name</label>
+                  <input id="portfolio-name"
                     type="text"
                     className="form-input"
                     placeholder="e.g. Technology Stocks, Retirement Fund"
@@ -569,8 +475,8 @@ export default function PortfolioDashboard({ signOut, user }) {
                 </div>
 
                 <div className="form-group">
-                  <label className="form-label">Description</label>
-                  <textarea
+                  <label className="form-label" htmlFor="portfolio-description">Description</label>
+                  <textarea id="portfolio-description"
                     className="form-textarea"
                     placeholder="Describe the strategy or goal of this portfolio..."
                     value={portfolioForm.description}
@@ -580,8 +486,8 @@ export default function PortfolioDashboard({ signOut, user }) {
 
                 <div className="form-row">
                   <div className="form-group">
-                    <label className="form-label">Base Currency</label>
-                    <select
+                    <label className="form-label" htmlFor="portfolio-currency">Base Currency</label>
+                    <select id="portfolio-currency"
                       className="form-select"
                       value={portfolioForm.baseCurrency}
                       onChange={(e) => setPortfolioForm({ ...portfolioForm, baseCurrency: e.target.value })}
@@ -592,13 +498,7 @@ export default function PortfolioDashboard({ signOut, user }) {
                       <option value="JPY">JPY (¥)</option>
                     </select>
                   </div>
-                  
-                  <div className="form-group">
-                    <label className="form-label">Cost Basis Method</label>
-                    <select className="form-select" disabled>
-                      <option>FIFO (First In, First Out)</option>
-                    </select>
-                  </div>
+
                 </div>
               </div>
               <footer className="modal-footer">
@@ -613,21 +513,22 @@ export default function PortfolioDashboard({ signOut, user }) {
       )}
 
       {/* --- Add/Edit Transaction Modal (Acceptance Criteria #2) --- */}
-      {transactionModalOpen && (
+      {transactionPortfolio && (
         <div className="modal-overlay">
-          <div className="modal-container" role="dialog" aria-modal="true" aria-labelledby="transaction-ledger-title">
+          <div className="modal-container" role="dialog" aria-modal="true" aria-labelledby="transaction-ledger-title" aria-describedby="transaction-ledger-portfolio">
             <header className="modal-header">
               <h3 id="transaction-ledger-title">{editingTransaction ? 'Edit Transaction Ledger Entry' : 'Record Transaction Ledger Entry'}</h3>
-              <button type="button" className="modal-close-btn" onClick={() => setTransactionModalOpen(false)} aria-label="Close dialog">×</button>
+              <button type="button" className="modal-close-btn" onClick={() => setTransactionPortfolio(null)} aria-label="Close dialog">×</button>
             </header>
             <form onSubmit={handleTransactionSubmit}>
               <div className="modal-body">
+                <p className="muted" id="transaction-ledger-portfolio">For {transactionPortfolio.name}</p>
                 {formError && <div className="form-error">{formError}</div>}
-                
+
                 <div className="form-row">
                   <div className="form-group">
-                    <label className="form-label">Transaction Type</label>
-                    <select
+                    <label className="form-label" htmlFor="transaction-type">Transaction Type</label>
+                    <select id="transaction-type"
                       className="form-select"
                       value={transactionForm.type}
                       onChange={(e) => setTransactionForm({ ...transactionForm, type: e.target.value })}
@@ -644,9 +545,10 @@ export default function PortfolioDashboard({ signOut, user }) {
                   </div>
 
                   <div className="form-group">
-                    <label className="form-label">Date & Time</label>
-                    <input
+                    <label className="form-label" htmlFor="transaction-time">Date & Time</label>
+                    <input id="transaction-time"
                       type="datetime-local"
+                      step="0.001"
                       className="form-input"
                       value={transactionForm.timestamp}
                       onChange={(e) => setTransactionForm({ ...transactionForm, timestamp: e.target.value })}
@@ -659,8 +561,8 @@ export default function PortfolioDashboard({ signOut, user }) {
                   /* Trade Specific Fields */
                   <>
                     <div className="form-group">
-                      <label className="form-label">Asset Ticker Symbol</label>
-                      <input
+                      <label className="form-label" htmlFor="transaction-ticker">Asset Ticker Symbol</label>
+                      <input id="transaction-ticker"
                         type="text"
                         className="form-input"
                         placeholder="e.g. AAPL, MSFT, TSLA"
@@ -670,11 +572,11 @@ export default function PortfolioDashboard({ signOut, user }) {
                         disabled={!!editingTransaction} // Lock ticker on edit
                       />
                     </div>
-                    
+
                     <div className="form-row">
                       <div className="form-group">
-                        <label className="form-label">Quantity (Shares)</label>
-                        <input
+                        <label className="form-label" htmlFor="transaction-quantity">Quantity (Shares)</label>
+                        <input id="transaction-quantity"
                           type="number"
                           step="any"
                           min="0.00000001"
@@ -686,8 +588,8 @@ export default function PortfolioDashboard({ signOut, user }) {
                         />
                       </div>
                       <div className="form-group">
-                        <label className="form-label">Price per Share ({currencySymbol})</label>
-                        <input
+                        <label className="form-label" htmlFor="transaction-price">Price per Share ({transactionCurrencySymbol})</label>
+                        <input id="transaction-price"
                           type="number"
                           step="any"
                           min={transactionForm.type === 'transfer_in' ? '0' : '0.01'}
@@ -703,8 +605,8 @@ export default function PortfolioDashboard({ signOut, user }) {
                 ) : (
                   /* Cash Movements Specific Fields */
                   <div className="form-group">
-                    <label className="form-label">Amount ({currencySymbol})</label>
-                    <input
+                    <label className="form-label" htmlFor="transaction-amount">Amount ({transactionCurrencySymbol})</label>
+                    <input id="transaction-amount"
                       type="number"
                       step="0.01"
                       min="0.01"
@@ -718,7 +620,7 @@ export default function PortfolioDashboard({ signOut, user }) {
                 )}
               </div>
               <footer className="modal-footer">
-                <button type="button" className="btn-secondary" onClick={() => setTransactionModalOpen(false)}>Cancel</button>
+                <button type="button" className="btn-secondary" onClick={() => setTransactionPortfolio(null)}>Cancel</button>
                 <button type="submit" className="btn-primary" disabled={formSubmitting}>
                   {formSubmitting ? 'Saving...' : (editingTransaction ? 'Save Changes' : 'Record Transaction')}
                 </button>
@@ -728,10 +630,6 @@ export default function PortfolioDashboard({ signOut, user }) {
         </div>
       )}
 
-      {/* Footer */}
-      <footer className="dashboard-footer">
-        <p>&copy; 2026 Portfolio App. All rights reserved.</p>
-      </footer>
     </div>
   );
 }
